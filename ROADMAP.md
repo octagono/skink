@@ -26,6 +26,9 @@ Target: **10/10** — reliability, security depth, and operational flexibility w
 | Adaptive yamux window (RTT-based tuning) | ✅ Done | T3.1 |
 | Configurable DNS in SOCKS5 (remote/local/both) | ✅ Done | T3.2 |
 | QUIC native UDP datagram support | ✅ Done (interface) | T3.3 |
+| Encrypted state files (AES-256-GCM at rest) | ✅ Done | T3.1 |
+| Secure sync channel (AES-256-GCM) | ✅ Done | T3.1 |
+| Padding performance (sync.Pool) | ✅ Done | T3.1 |
 
 ## Next Priority (Proposed)
 

@@ -210,6 +210,134 @@ skink tunnel --server relay:9090 --type tcp --local :22 --integrity
 Adds an HMAC tag to every control message. The relay verifies each message
 before processing. Integrity key is derived from the PAKE session key.
 
+### PFS rekeying
+
+Periodic key rotation for long-lived tunnels using ECDH P-256 over the
+encrypted control channel:
+
+```bash
+skink tunnel --server relay:9090 --type tcp --local :22 --rekey-interval 1800
+```
+
+Fresh ECDH keypair generated each interval. Shared secret derived via
+ECDH, new session key = SHA256(old_key || shared_secret). Both sides
+switch atomically. No connection drop.
+
+### Connection migration
+
+Move a live tunnel to another relay without restarting:
+
+```bash
+skink tunnel --server relay-a:9090 --type tcp --local :22 --migrate relay-b:9090
+```
+
+Establishes new control connection + resume to target relay, closes old
+connection, re-establishes data session on target's data port.
+
+### Per-tunnel ACLs
+
+Fine-grained access control inside tunnels:
+
+```bash
+skink tunnel --server relay:9090 --type socks5 \
+  --acl-allow "10.0.0.0/8,*.internal.corp,192.168.0.0/16" \
+  --acl-deny "0.0.0.0/0"
+```
+
+Supports IP, CIDR, and domain patterns. Checked on every proxy connection
+in `RequestProxy` before forwarding.
+
+### Built-in compression
+
+Configurable compression per tunnel with auto-negotiation:
+
+```bash
+skink tunnel --server relay:9090 --type http --local :3000 --compress gzip
+```
+
+Options: `deflate` (default), `gzip`, `none`. Applied to all tunnel control
+messages and data streams.
+
+### Tamper-evident audit logging
+
+Append-only signed audit log on the relay for tunnel events:
+
+```bash
+skink relay --tunnel-port 9090 --audit-log /var/log/skink-audit.json
+```
+
+Every tunnel registration, disconnection, and proxy event is written as a
+JSON line with HMAC-SHA256 chain hash. Tampering breaks the hash chain.
+
+### Domain regex routing
+
+Extend split tunneling with regex domain patterns:
+
+```bash
+skink tunnel --server relay:9090 --type socks5 \
+  --route "re:.*\.corp\.example\.(com|net)" \
+  --bypass "re:.*\.public-cdn\.com"
+```
+
+Prefix patterns with `re:` for regex matching. Works alongside CIDR and
+wildcard domain patterns in `--route`/`--bypass`.
+
+### STUN / NAT traversal
+
+Discover your public address via STUN for UDP hole punching:
+
+```bash
+skink tunnel --server relay:9090 --stun-server stun.l.google.com:19302
+```
+
+Prints the public IP:port discovered via STUN binding request. Useful for
+debugging NAT traversal with UDP tunnels.
+
+### Embedded lite relay
+
+Spawn a minimal in-process relay for direct P2P fallback:
+
+```bash
+skink tunnel --server main-relay:9090 --embedded-relay 9999
+```
+
+When the main relay is unreachable, the embedded relay accepts tunnel
+connections directly on port 9999 with PAKE authentication.
+
+### Adaptive window tuning
+
+Auto-tune yamux stream window based on measured RTT:
+
+```bash
+skink tunnel --server relay:9090 --adaptive-window
+```
+
+Sends RTT probe messages every 5 seconds. Smoothed RTT adjusts the
+yamux window to match Bandwidth-Delay Product (BDP) for optimal
+throughput on high-latency links.
+
+### Configurable DNS in SOCKS5
+
+Control where DNS resolution happens in SOCKS5 proxy mode:
+
+```bash
+skink tunnel --server relay:9090 --type socks5 --dns remote
+```
+
+Modes: `remote` (default — relay resolves), `local` (client resolves
+before forwarding), `both` (try local, fallback to remote).
+
+### Encrypted state files
+
+State files persisted via `--persist` are encrypted at rest with AES-256-GCM:
+
+```bash
+skink relay --tunnel-port 9090 --persist /var/lib/skink/state.json --state-key "your-master-key"
+```
+
+Key defaults to SHA-256 of relay password. Use `--state-key` for a
+dedicated key. Use `--persist :memory:` for in-memory only (no disk).
+
 ### REST API
 
 Manage tunnels programmatically via a local HTTP API on the relay.
