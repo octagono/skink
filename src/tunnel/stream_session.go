@@ -5,11 +5,14 @@ import (
 	"sync"
 
 	"github.com/hashicorp/yamux"
+	log "github.com/schollz/logger"
 )
 
-// StreamSession abstracts stream multiplexing over a single connection.
-// Both yamux (TCP/WSS) and QUIC (native streams) implement this interface,
-// allowing the tunnel client/server to work with either transparently.
+type DatagramSession interface {
+	SendDatagram([]byte) error
+	ReceiveDatagram() ([]byte, error)
+}
+
 type StreamSession interface {
 	// OpenStream opens a new bidirectional stream.
 	OpenStream() (net.Conn, error)
@@ -64,6 +67,10 @@ func (w *YamuxSessionWrapper) OpenStream() (net.Conn, error) {
 
 func (w *YamuxSessionWrapper) AcceptStream() (net.Conn, error) {
 	return w.session.Accept()
+}
+
+func (w *YamuxSessionWrapper) SetMaxWindow(bytes int) {
+	log.Debugf("yamux window adjust: %d bytes (actual change requires session recreate)", bytes)
 }
 
 func (w *YamuxSessionWrapper) Ping() error {

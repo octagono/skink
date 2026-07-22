@@ -47,6 +47,9 @@ const (
 	// Connection migration
 	TypeTunnelMigrate Type = "tunnel-migrate"
 
+	// Adaptive window probing
+	TypeRTTProbe Type = "rtt-probe"
+
 	// Relay HA sync
 	TypeTunnelSync       Type = "tunnel-sync"
 	TypeTunnelSyncRemove Type = "tunnel-sync-remove"

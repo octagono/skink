@@ -121,6 +121,8 @@ type Client struct {
 	reconnectAttempt int
 	pendingRekeyKey  *ecdh.PrivateKey
 	socks5Started    bool
+	rttNanos         int64 // latest smoothed RTT in nanoseconds
+	rttMu            sync.Mutex
 
 	stopOnce sync.Once
 	quit     chan struct{}
@@ -312,7 +314,20 @@ func (c *Client) handleSOCKS5Conn(conn net.Conn) {
 
 	log.Debugf("SOCKS5 CONNECT %s", targetAddr)
 
-	// Check split tunnel routing
+	// Resolve DNS locally if configured
+	if c.config.DNSMode == "local" || c.config.DNSMode == "both" {
+		if host, port, err := net.SplitHostPort(targetAddr); err == nil {
+			if ip := net.ParseIP(host); ip == nil {
+				ips, err := net.LookupIP(host)
+				if err == nil && len(ips) > 0 {
+					targetAddr = net.JoinHostPort(ips[0].String(), port)
+				} else if c.config.DNSMode == "local" {
+					log.Debugf("SOCKS5 DNS local failed: %v", err)
+				}
+			}
+		}
+	}
+
 	if c.routeRule != nil && !c.routeRule.Route(targetAddr) {
 		log.Debugf("SOCKS5 bypassing tunnel for %s (direct connect)", targetAddr)
 		c.handleSOCKS5Direct(conn, targetAddr)
@@ -912,10 +927,21 @@ func (c *Client) controlLoop() error {
 		defer rekeyTicker.Stop()
 	}
 
+	var rttTicker *time.Ticker
+	var rttCh <-chan time.Time
+	if c.config.AdaptiveWindow {
+		rttTicker = time.NewTicker(5 * time.Second)
+		rttCh = rttTicker.C
+		defer rttTicker.Stop()
+	}
+
 	for {
 		select {
 		case <-c.quit:
 			return nil
+		case <-rttCh:
+			c.sendRTTProbe()
+
 		case <-heartbeatTicker.C:
 			if err := SendTunnelMessage(c.controlConn, c.controlKey, message.TypeHeartbeat, HeartbeatMessage{
 				Timestamp: time.Now().Unix(),
@@ -956,6 +982,13 @@ func (c *Client) controlLoop() error {
 }
 
 // handleMessage processes a single tunnel control message.
+func (c *Client) sendRTTProbe() {
+	rpm := RTTProbeMessage{SentAt: time.Now().UnixNano()}
+	if err := SendTunnelMessage(c.controlConn, c.controlKey, message.TypeRTTProbe, rpm); err != nil {
+		return
+	}
+}
+
 func (c *Client) initiateRekey() error {
 	priv, err := generateECDHKey()
 	if err != nil {
@@ -991,6 +1024,40 @@ func (c *Client) handleRekeyAck(payload []byte) error {
 func (c *Client) handleMessage(msgType message.Type, payload []byte) error {
 	switch msgType {
 	case message.TypeHeartbeat:
+		return nil
+
+	case message.TypeRTTProbe:
+		var rpm RTTProbeMessage
+		if err := DecodePayload(payload, &rpm); err == nil {
+			rtt := time.Now().UnixNano() - rpm.SentAt
+			if rtt > 0 && rtt < 1e10 {
+				c.rttMu.Lock()
+				if c.rttNanos == 0 {
+					c.rttNanos = rtt
+				} else {
+					c.rttNanos = (c.rttNanos*7 + rtt) / 8
+				}
+				smoothed := c.rttNanos
+				c.rttMu.Unlock()
+
+				if c.config.AdaptiveWindow {
+					bdp := int64(float64(smoothed) * 1.25e6 / 1e9)
+					if bdp < 1<<20 {
+						bdp = 1 << 20
+					}
+					if bdp > 64<<20 {
+						bdp = 64 << 20
+					}
+					c.dataSessionMu.Lock()
+					if c.dataSession != nil {
+						if ys, ok := c.dataSession.(*YamuxSessionWrapper); ok {
+							ys.SetMaxWindow(int(bdp))
+						}
+					}
+					c.dataSessionMu.Unlock()
+				}
+			}
+		}
 		return nil
 
 	case message.TypeRekeyAck:

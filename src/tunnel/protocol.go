@@ -92,6 +92,10 @@ type TunnelResumeMessage struct {
 	Token    string `json:"token"`
 }
 
+type RTTProbeMessage struct {
+	SentAt int64 `json:"t"` // UnixNano when sent
+}
+
 type RekeyMessage struct {
 	PublicKey []byte `json:"pk"`
 }
@@ -364,8 +368,10 @@ type Config struct {
 	BandwidthLimit int64
 	IdleTimeout    int
 	RekeyInterval  int
-	ACLAllow       []string // IP/CIDR/domain allow list
-	ACLDeny        []string // IP/CIDR/domain deny list
+	AdaptiveWindow bool
+	ACLAllow       []string
+	ACLDeny        []string
+	DNSMode        string // "remote" (default), "local", "both"
 }
 
 // ConfigFile is a YAML-serializable configuration for the tunnel client.

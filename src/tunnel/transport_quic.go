@@ -103,8 +103,14 @@ func (w *QuicSessionWrapper) IsClosed() bool {
 	return w.conn.Context().Err() != nil
 }
 
-// Ping uses QUIC's keepalive mechanism. QUIC connections are inherently
-// kept alive by the KeepAlivePeriod config, so this is a no-op.
+func (w *QuicSessionWrapper) SendDatagram(p []byte) error {
+	return w.conn.SendDatagram(p)
+}
+
+func (w *QuicSessionWrapper) ReceiveDatagram() ([]byte, error) {
+	return w.conn.ReceiveDatagram(w.conn.Context())
+}
+
 func (w *QuicSessionWrapper) Ping() error {
 	if w.IsClosed() {
 		return errQuicClosed

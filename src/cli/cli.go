@@ -183,6 +183,8 @@ func Run() (err error) {
 				&cli.StringFlag{Name: "stun-server", Value: "", Usage: "STUN server for UDP NAT traversal (host:port)", EnvVars: []string{"SKINK_STUN_SERVER"}},
 				&cli.StringFlag{Name: "compress", Value: "deflate", Usage: "compression method (deflate, gzip, none)", EnvVars: []string{"SKINK_COMPRESS"}},
 				&cli.IntFlag{Name: "embedded-relay", Value: 0, Usage: "start embedded P2P relay on port (0=disabled, for direct fallback)", EnvVars: []string{"SKINK_EMBEDDED_RELAY"}},
+				&cli.BoolFlag{Name: "adaptive-window", Usage: "auto-tune yamux window based on measured RTT", EnvVars: []string{"SKINK_ADAPTIVE_WINDOW"}},
+				&cli.StringFlag{Name: "dns", Value: "remote", Usage: "DNS resolution mode (remote, local, both)", EnvVars: []string{"SKINK_DNS"}},
 				&cli.StringFlag{Name: "audit-log", Value: "", Usage: "path to tamper-evident audit log (append-only JSON with HMAC)", EnvVars: []string{"SKINK_AUDIT_LOG"}},
 			},
 		},
@@ -1305,6 +1307,8 @@ func tunnelCmd(c *cli.Context) error {
 		BandwidthLimit: c.Int64("bandwidth-limit"),
 		IdleTimeout:    c.Int("idle-timeout"),
 		RekeyInterval:  c.Int("rekey-interval"),
+		AdaptiveWindow: c.Bool("adaptive-window"),
+		DNSMode:        c.String("dns"),
 	}
 
 	if allowStr := c.String("acl-allow"); allowStr != "" {

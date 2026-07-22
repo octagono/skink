@@ -23,6 +23,9 @@ Target: **10/10** — reliability, security depth, and operational flexibility w
 | Protocol versioning | ✅ Done | T2.5 |
 | Plugin / extension system (interfaces) | ✅ Done | T2.5 |
 | Embedded lite relay (P2P fallback) | ✅ Done | T2.5 |
+| Adaptive yamux window (RTT-based tuning) | ✅ Done | T3.1 |
+| Configurable DNS in SOCKS5 (remote/local/both) | ✅ Done | T3.2 |
+| QUIC native UDP datagram support | ✅ Done (interface) | T3.3 |
 
 ## Next Priority (Proposed)
 

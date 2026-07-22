@@ -1151,6 +1151,12 @@ func (s *Server) controlLoop(c *comm.Comm, key []byte, entry *TunnelEntry) {
 				// The connection itself arrives via the data port handler,
 				// so this is just a confirmation — no action needed.
 
+			case message.TypeRTTProbe:
+				var rpm RTTProbeMessage
+				if err := DecodePayload(result.payload, &rpm); err == nil {
+					SendTunnelMessage(c, key, message.TypeRTTProbe, rpm)
+				}
+
 			case message.TypeRekey:
 				var rm RekeyMessage
 				if err := DecodePayload(result.payload, &rm); err != nil {
