@@ -180,7 +180,44 @@ The operator connects to the port allocated on `relay1`; traffic is spliced thro
 - [ ] For maximum stealth, run the relay as a `.onion` hidden service (section 3) — no public TCP port at all.
 - [ ] Rotate `SKINK_PASS` periodically; it is the single shared credential for file transfer.
 
-## 7. Opsec notes
+## 7. Security & resilience features
+
+```bash
+# PFS rekeying every 30min
+skink tunnel --server relay:9090 --pass auto --type tcp --local :22 --rekey-interval 1800
+
+# Per-tunnel ACLs
+skink tunnel --server relay:9090 --pass auto --type socks5 \
+  --acl-allow "10.0.0.0/8,*.internal.corp" --acl-deny "0.0.0.0/0"
+
+# Message integrity
+skink tunnel --server relay:9090 --pass auto --type tcp --local :22 --integrity
+
+# Traffic obfuscation
+skink tunnel --server relay:9090 --pass auto --type socks5 --padding-min 64 --padding-max 1024
+
+# Session persistence (tunnels survive relay restart)
+skink relay --pass auto --persist /var/lib/skink/state.json
+
+# Session resume (client reconnects with same tunnel ID)
+skink tunnel --server relay:9090 --pass auto --type tcp --local :22 \
+  --resume /tmp/skink-resume.json
+
+# Tamper-evident audit log
+skink relay --pass auto --audit-log /var/log/skink-audit.json
+
+# Encrypted state at rest
+skink relay --pass auto --persist state.json --state-key "master-key"
+
+# Adaptive yamux window (RTT-based tuning)
+skink tunnel --server relay:9090 --pass auto --type tcp --local :22 --adaptive-window
+
+# SOCKS5 DNS modes
+skink tunnel --server relay:9090 --pass auto --type socks5 --dns remote   # default
+skink tunnel --server relay:9090 --pass auto --type socks5 --dns local    # client resolves
+```
+
+## 8. Opsec notes
 
 Honest constraints every operator should know:
 - **Relay is a single point of trust.** Whoever controls the relay sees connection metadata (src IP, timestamps, codephrases) but NOT file/stream contents (end-to-end PAKE + XChaCha20-Poly1305 between peers).

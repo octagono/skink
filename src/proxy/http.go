@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/octagono/skink/src/tunnel"
 	log "github.com/schollz/logger"
 )
@@ -80,13 +81,16 @@ type HTTPProxyConfig struct {
 // HTTPProxy handles incoming HTTP connections from the public internet
 // and forwards them through the appropriate tunnel using httputil.ReverseProxy.
 type HTTPProxy struct {
-	cfg     HTTPProxyConfig
-	httpSrv *http.Server
-	// Per-entry transports (cached) — entry.ID → http.RoundTripper
+	cfg        HTTPProxyConfig
+	httpSrv    *http.Server
 	transports sync.Map
+	wssHandler func(net.Conn)
 }
 
-// NewHTTPProxy creates an HTTP proxy using the standard http.Server.
+func (p *HTTPProxy) SetWSSHandler(handler func(net.Conn)) {
+	p.wssHandler = handler
+}
+
 func NewHTTPProxy(cfg HTTPProxyConfig) *HTTPProxy {
 	p := &HTTPProxy{cfg: cfg}
 
@@ -138,6 +142,20 @@ func (p *HTTPProxy) Stop() error {
 
 // ServeHTTP implements the http.Handler interface.
 func (p *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/tunnel" && r.Header.Get("Upgrade") == "websocket" && p.wssHandler != nil {
+		upgrader := &websocket.Upgrader{
+			ReadBufferSize:  32768,
+			WriteBufferSize: 32768,
+			CheckOrigin:     func(r *http.Request) bool { return true },
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		p.wssHandler(tunnel.NewWSConn(conn))
+		return
+	}
+
 	start := time.Now()
 	rec := &statusRecorder{ResponseWriter: w}
 

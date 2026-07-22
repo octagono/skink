@@ -44,6 +44,12 @@ Assumed in PATH (else `~/.local/bin/skink`). Project + full docs: `README.md`. D
    - Tunnel HTTP proxy: `8080` (`--tunnel-http-port`)
    - Metrics (optional): `9092`
 
+9. **No suto-generated tokens.** `--token ""` means no auth. Running tunnel without `--token` skips auth entirely.
+
+10. **Subdomains are lowercase.** Case-insensitive matching now. Use lowercase subdomains in URLs.
+
+11. **New flags:** `--rekey-interval N` (PFS), `--acl-allow`/`--acl-deny` (per-tunnel ACLs), `--adaptive-window` (RTT tuning), `--stun-server` (STUN), `--compress gzip|deflate|none`, `--dns remote|local|both` (SOCKS5 DNS), `--embedded-relay PORT` (P2P fallback), `--audit-log PATH`, `--migrate host:port`.
+
 ## Command reference
 
 ### File transfer

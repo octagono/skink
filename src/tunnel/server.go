@@ -66,9 +66,9 @@ type Server struct {
 
 	listener     net.Listener
 	dataListener net.Listener
-	wssListener  *http.Server // WebSocket transport listener
-	pipeListener net.Listener // named pipe listener (Windows SMB)
-	pipeName     string       // named pipe name
+	wssListener  *http.Server
+	pipeListener net.Listener
+	pipeName     string
 	quit         chan struct{}
 	wg           sync.WaitGroup
 
@@ -371,17 +371,20 @@ func (s *Server) Start() error {
 	s.wg.Add(1)
 	go s.dataAcceptLoop()
 
-	// Start WebSocket transport listener (alternative to raw TCP for the control port)
-	wsAddr := fmt.Sprintf("%s:%d", s.host, s.port)
-	wsSrv, err := StartWSServer(wsAddr, func(conn net.Conn) {
-		s.wg.Add(1)
-		s.handleConnection(conn)
-	})
-	if err != nil {
-		log.Warnf("WSS transport not available: %v", err)
-	} else {
-		s.wssListener = wsSrv
-		log.Infof("tunnel server WSS on %s%s", wsAddr, WSPath)
+	// WSS is served through the HTTPS proxy when TLS is configured.
+	// Without TLS, WebSocket is available on the control port.
+	if s.port > 0 {
+		wsAddr := fmt.Sprintf("%s:%d", s.host, s.port)
+		wsSrv, err := StartWSServer(wsAddr, func(conn net.Conn) {
+			s.wg.Add(1)
+			s.HandleConnection(conn)
+		})
+		if err != nil {
+			log.Warnf("WSS transport not available: %v", err)
+		} else {
+			s.wssListener = wsSrv
+			log.Infof("tunnel server WSS on %s%s", wsAddr, WSPath)
+		}
 	}
 
 	// Restore persisted tunnels from the store.
@@ -472,7 +475,7 @@ func (s *Server) acceptLoop() {
 		}
 
 		s.wg.Add(1)
-		go s.handleConnection(conn)
+		go s.HandleConnection(conn)
 	}
 }
 
@@ -492,7 +495,7 @@ func (s *Server) pipeAcceptLoop() {
 		}
 
 		s.wg.Add(1)
-		go s.handleConnection(conn)
+		go s.HandleConnection(conn)
 	}
 }
 
@@ -521,9 +524,17 @@ func (s *Server) cleanupLoop() {
 	}
 }
 
+// HandleWSSConnection tracks the connection in the server WaitGroup
+// before delegating to HandleConnection. Use this from WSS handlers
+// that do not already hold a WaitGroup reference.
+func (s *Server) HandleWSSConnection(rawConn net.Conn) {
+	s.wg.Add(1)
+	go s.HandleConnection(rawConn)
+}
+
 // handleConnection handles an incoming tunnel control connection.
 // Proxy data connections come through the separate data port instead.
-func (s *Server) handleConnection(rawConn net.Conn) {
+func (s *Server) HandleConnection(rawConn net.Conn) {
 	defer s.wg.Done()
 	defer rawConn.Close()
 

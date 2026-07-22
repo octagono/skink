@@ -53,7 +53,7 @@ type wsConn struct {
 	noiseDecrypt func([]byte) ([]byte, error)
 }
 
-func newWSConn(conn *websocket.Conn) *wsConn {
+func NewWSConn(conn *websocket.Conn) *wsConn {
 	remoteAddr := &wsAddr{addr: "ws://remote"}
 	localAddr := &wsAddr{addr: "ws://local"}
 	if rawConn := conn.UnderlyingConn(); rawConn != nil {
@@ -241,20 +241,13 @@ func utlsWSSDialer(addr, path string, tlsSkipVerify bool, noisePrivKey string) (
 		return nil, fmt.Errorf("utls handshake: %w", err)
 	}
 
-	// Build WebSocket upgrade request manually over the TLS connection
-	url := fmt.Sprintf("wss://%s%s", host, path)
 	header := http.Header{}
 	header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 	header.Set("Origin", fmt.Sprintf("https://%s", host))
-	header.Set("Sec-WebSocket-Version", "13")
-	header.Set("Sec-WebSocket-Key", wsGenerateKey())
-	header.Set("Sec-WebSocket-Extensions", "permessage-deflate; client_max_window_bits")
-	header.Set("Pragma", "no-cache")
-	header.Set("Cache-Control", "no-cache")
 
-	// We need to use the gorilla/websocket dialer with a custom net.Dialer
-	// that returns our utls connection. The cleanest approach is to create
-	// a custom dialer that uses the utls connection directly.
+	// Use ws:// scheme with the already-TLS connection to prevent gorilla from
+	// double-wrapping with TLS. NetDial returns the utls-wrapped connection.
+	url := fmt.Sprintf("ws://%s%s", addr, path)
 	dialer := &websocket.Dialer{
 		NetDial: func(network, addr string) (net.Conn, error) {
 			return tlsConn, nil
@@ -270,7 +263,7 @@ func utlsWSSDialer(addr, path string, tlsSkipVerify bool, noisePrivKey string) (
 		return nil, fmt.Errorf("ws dial %s: %w", url, err)
 	}
 
-	return newWSConn(wssConn), nil
+	return NewWSConn(wssConn), nil
 }
 
 func wsGenerateKey() string {
@@ -308,7 +301,7 @@ func WSServerHandler(upgrader *websocket.Upgrader, handler func(net.Conn)) http.
 			log.Debugf("ws upgrade: %v", err)
 			return
 		}
-		ws := newWSConn(conn)
+		ws := NewWSConn(conn)
 		handler(ws)
 	}
 }
@@ -332,6 +325,13 @@ func StartWSServer(addr string, handler func(net.Conn)) (*http.Server, error) {
 	}()
 
 	return srv, nil
+}
+
+func AddWSSToHTTPServer(srv *http.Server, handler func(net.Conn)) {
+	mux, ok := srv.Handler.(*http.ServeMux)
+	if ok {
+		mux.HandleFunc(WSPath, WSServerHandler(nil, handler))
+	}
 }
 
 func HasWSSPrefix(addr string) bool {

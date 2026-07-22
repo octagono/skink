@@ -495,10 +495,11 @@ func (c *Client) ensureDataSession() error {
 		}
 	}
 
-	// Derive data port (host:port+1) from server address
-	host, portStr, err := net.SplitHostPort(c.config.ServerAddr)
+	// Strip WSS prefix before parsing host:port
+	serverAddr := StripWSSPrefix(c.config.ServerAddr)
+	host, portStr, err := net.SplitHostPort(serverAddr)
 	if err != nil {
-		host = ""
+		host = serverAddr
 		portStr = fmt.Sprint(DefaultTunnelPort)
 	}
 	var port int
@@ -671,6 +672,7 @@ func (c *Client) tryConnect(serverAddr string) error {
 		IdleTimeout:    c.config.IdleTimeout,
 		ACLAllow:       c.config.ACLAllow,
 		ACLDeny:        c.config.ACLDeny,
+		Private:        c.config.Private,
 	}
 	if err := SendTunnelMessage(c.controlConn, c.controlKey, message.TypeTunnelRegister, reg); err != nil {
 		c.controlConn.Close()
@@ -719,10 +721,19 @@ func (c *Client) connectWS(addr string) error {
 	rawAddr := StripWSSPrefix(addr)
 	path := WSPath
 
-	// Check if the address includes a custom path
 	if parts := strings.SplitN(rawAddr, "/", 2); len(parts) == 2 {
 		rawAddr = parts[0]
 		path = "/" + parts[1]
+	}
+
+	// WSS with TLS skip verify uses the HTTPS proxy port (8080) instead of
+	// the tunnel control port (9090), since TLS is served by the proxy.
+	if c.config.TLS.InsecureSkipVerify {
+		if host, port, err := net.SplitHostPort(rawAddr); err == nil {
+			if port == fmt.Sprint(DefaultTunnelPort) || port == "9090" {
+				rawAddr = net.JoinHostPort(host, "8080")
+			}
+		}
 	}
 
 	// Add default port if not specified
@@ -739,7 +750,7 @@ func (c *Client) connectWS(addr string) error {
 
 	log.Debugf("connecting to tunnel server via WebSocket at %s%s", rawAddr, path)
 
-	wsNetConn, err := WSClientDialer(rawAddr, path, false)
+	wsNetConn, err := WSClientDialer(rawAddr, path, c.config.TLS.InsecureSkipVerify)
 	if err != nil {
 		return fmt.Errorf("ws dial: %w", err)
 	}
@@ -769,6 +780,7 @@ func (c *Client) connectWS(addr string) error {
 		IdleTimeout:    c.config.IdleTimeout,
 		ACLAllow:       c.config.ACLAllow,
 		ACLDeny:        c.config.ACLDeny,
+		Private:        c.config.Private,
 	}
 
 	if err := SendTunnelMessage(c.controlConn, c.controlKey, message.TypeTunnelRegister, reg); err != nil {
@@ -861,6 +873,7 @@ func (c *Client) connectPipe() error {
 		IdleTimeout:    c.config.IdleTimeout,
 		ACLAllow:       c.config.ACLAllow,
 		ACLDeny:        c.config.ACLDeny,
+		Private:        c.config.Private,
 	}
 
 	if err := SendTunnelMessage(c.controlConn, c.controlKey, message.TypeTunnelRegister, reg); err != nil {
@@ -1275,8 +1288,8 @@ func (c *Client) getOrCreateDataSession() (StreamSession, error) {
 		return c.dataSession, nil
 	}
 
-	// Determine the data port address
-	serverAddr := c.config.ServerAddr
+	// Determine the data port address (strip WSS prefix if present)
+	serverAddr := StripWSSPrefix(c.config.ServerAddr)
 	host, portStr, err := net.SplitHostPort(serverAddr)
 	if err != nil {
 		host = serverAddr

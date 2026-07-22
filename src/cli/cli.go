@@ -1114,6 +1114,7 @@ func relay(c *cli.Context) (err error) {
 				httpCfg.TLSConfig = &tls.Config{
 					Certificates: []tls.Certificate{cert},
 					MinVersion:   tls.VersionTLS12,
+					NextProtos:   []string{"http/1.1"},
 				}
 				log.Infof("TLS enabled for tunnel HTTP proxy")
 			} else if autocertDomains := c.String("tunnel-autocert"); autocertDomains != "" {
@@ -1153,6 +1154,12 @@ func relay(c *cli.Context) (err error) {
 			}
 
 			httpProxy := proxy.NewHTTPProxy(httpCfg)
+			// Register WSS handler on the HTTPS proxy when TLS is enabled
+			if httpCfg.TLSConfig != nil {
+				httpProxy.SetWSSHandler(func(conn net.Conn) {
+					srv.HandleWSSConnection(conn)
+				})
+			}
 			go func() {
 				if err := httpProxy.Start(); err != nil {
 					log.Errorf("tunnel HTTP proxy error: %v", err)
@@ -1340,10 +1347,9 @@ func tunnelCmd(c *cli.Context) error {
 		cfgFile.ApplyToConfig(&config)
 	}
 
-	// TLS wrapping
+	config.TLS.InsecureSkipVerify = c.Bool("tls-skip-verify")
 	if c.Bool("tls") {
 		config.TLS.Enable = true
-		config.TLS.InsecureSkipVerify = c.Bool("tls-skip-verify")
 	}
 
 	// Heartbeat config
