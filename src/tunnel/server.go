@@ -862,7 +862,10 @@ func (s *Server) handleTunnelRegister(c *comm.Comm, key []byte, payload []byte, 
 		return
 	}
 
-	// Validate
+	if reg.Version > 0 && reg.Version != CurrentProtocolVersion {
+		log.Debugf("client protocol version %d, server version %d", reg.Version, CurrentProtocolVersion)
+	}
+
 	if reg.Type != TunnelTypeHTTP && reg.Type != TunnelTypeTCP && reg.Type != TunnelTypeUDP && reg.Type != TunnelTypeSOCKS5 {
 		SendTunnelMessage(c, key, message.TypeTunnelError, TunnelErrorMessage{
 			Message: fmt.Sprintf("unsupported tunnel type: %s", reg.Type),

@@ -27,6 +27,7 @@ const (
 )
 
 type TunnelRegistration struct {
+	Version        int        `json:"version,omitempty"`
 	Subdomain      string     `json:"subdomain"`
 	LocalAddr      string     `json:"local_addr"`
 	Type           TunnelType `json:"type"`
@@ -503,6 +504,7 @@ func DecodePayload(data []byte, v interface{}) error {
 const (
 	DefaultTunnelPort        = 9090
 	DefaultHTTPPort          = 8080
+	CurrentProtocolVersion   = 1
 	DefaultHeartbeatInterval = 30 * time.Second
 	DefaultHeartbeatTimeout  = 10 * time.Second
 	DefaultReconnectBase     = 1 * time.Second

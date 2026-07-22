@@ -20,9 +20,9 @@ Target: **10/10** — reliability, security depth, and operational flexibility w
 | Built-in compression (gzip/deflate/none) | ✅ Done | T2.2 |
 | Tamper-evident audit logging (HMAC chain) | ✅ Done | T2.3 |
 | Domain regex + SNI routing | ✅ Done | T2.4 |
-| Protocol versioning | ❌ Pending | — |
-| Plugin / extension system | ❌ Pending | — |
-| Embedded lite relay (P2P fallback) | ❌ Pending | — |
+| Protocol versioning | ✅ Done | T2.5 |
+| Plugin / extension system (interfaces) | ✅ Done | T2.5 |
+| Embedded lite relay (P2P fallback) | ✅ Done | T2.5 |
 
 ## Next Priority (Proposed)
 

@@ -182,6 +182,7 @@ func Run() (err error) {
 				&cli.StringFlag{Name: "acl-deny", Value: "", Usage: "comma-separated deny list (IP, CIDR, or domain) for proxy connections", EnvVars: []string{"SKINK_ACL_DENY"}},
 				&cli.StringFlag{Name: "stun-server", Value: "", Usage: "STUN server for UDP NAT traversal (host:port)", EnvVars: []string{"SKINK_STUN_SERVER"}},
 				&cli.StringFlag{Name: "compress", Value: "deflate", Usage: "compression method (deflate, gzip, none)", EnvVars: []string{"SKINK_COMPRESS"}},
+				&cli.IntFlag{Name: "embedded-relay", Value: 0, Usage: "start embedded P2P relay on port (0=disabled, for direct fallback)", EnvVars: []string{"SKINK_EMBEDDED_RELAY"}},
 				&cli.StringFlag{Name: "audit-log", Value: "", Usage: "path to tamper-evident audit log (append-only JSON with HMAC)", EnvVars: []string{"SKINK_AUDIT_LOG"}},
 			},
 		},
@@ -1409,6 +1410,16 @@ func tunnelCmd(c *cli.Context) error {
 		log.Info("shutting down tunnel...")
 		client.Stop()
 	}()
+
+	if embedPort := c.Int("embedded-relay"); embedPort > 0 {
+		er := tunnel.NewEmbeddedRelay(embedPort, serverPass)
+		if err := er.Start(); err != nil {
+			log.Warnf("embedded relay: %v", err)
+		} else {
+			defer er.Stop()
+			log.Infof("embedded relay listening on %s", er.Addr())
+		}
+	}
 
 	if stunServer := c.String("stun-server"); stunServer != "" {
 		go func() {

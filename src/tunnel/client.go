@@ -645,6 +645,7 @@ func (c *Client) tryConnect(serverAddr string) error {
 	}
 
 	reg := TunnelRegistration{
+		Version:        CurrentProtocolVersion,
 		Subdomain:      c.config.Subdomain,
 		LocalAddr:      c.config.LocalAddr,
 		Type:           c.config.TunnelType,
@@ -742,6 +743,7 @@ func (c *Client) connectWS(addr string) error {
 
 	// Send tunnel registration
 	reg := TunnelRegistration{
+		Version:        CurrentProtocolVersion,
 		Subdomain:      c.config.Subdomain,
 		LocalAddr:      c.config.LocalAddr,
 		Type:           c.config.TunnelType,
@@ -833,6 +835,7 @@ func (c *Client) connectPipe() error {
 
 	// Register tunnel
 	reg := TunnelRegistration{
+		Version:        CurrentProtocolVersion,
 		Subdomain:      c.config.Subdomain,
 		LocalAddr:      c.config.LocalAddr,
 		Type:           c.config.TunnelType,
