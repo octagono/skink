@@ -1,0 +1,83 @@
+name: release
+
+# Cross-compile skink for linux/darwin/windows x amd64/arm64 on every tag
+# push, archive, checksum, and attach the binaries to the GitHub release.
+# Can also be triggered manually (workflow_dispatch) to build an existing tag.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build and attach binaries to (e.g. v1.0.2)'
+        required: true
+        type: string
+
+permissions:
+  contents: write   # required to upload assets to a GitHub release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0                          # full history for git describe
+          ref: ${{ inputs.tag || github.ref }}    # tag commit on dispatch, push ref otherwise
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Resolve tag
+        id: tag
+        run: echo "name=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build cross-platform binaries
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.tag.outputs.name }}"
+          export CGO_ENABLED=0                    # static binaries, portable across glibc
+          mkdir -p dist
+
+          build_one() {
+            local goos="$1" goarch="$2"
+            local out="dist/skink-${goos}-${goarch}"
+            [ "$goos" = "windows" ] && out="${out}.exe"
+            echo "==> Building ${goos}/${goarch} (${VERSION})"
+            GOOS="$goos" GOARCH="$goarch" \
+              go build -trimpath \
+                -ldflags="-s -w -X github.com/octagono/skink/src/cli.Version=${VERSION}" \
+                -o "$out" .
+          }
+
+          build_one linux   amd64
+          build_one linux   arm64
+          build_one darwin  amd64
+          build_one darwin  arm64
+          build_one windows amd64
+          build_one windows arm64
+
+          # Archive: tar.gz for unix, zip for windows
+          cd dist
+          for f in skink-linux-* skink-darwin-*; do
+            [ -e "$f" ] && tar czf "${f}.tar.gz" "$f" && rm "$f"
+          done
+          for f in skink-windows-*.exe; do
+            [ -e "$f" ] && zip -q "${f%.exe}.zip" "$f" && rm "$f"
+          done
+
+          # SHA256 checksums
+          sha256sum *.tar.gz *.zip > checksums.txt
+          echo "==> Artifacts:" && ls -la
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          files: dist/*

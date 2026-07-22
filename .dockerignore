@@ -1,0 +1,12 @@
+.git/
+.gitignore
+.gitattributes
+.gitmodules
+.github/
+.slim/
+scripts/
+*.md
+*.png
+*.gif
+Dockerfile
+docker-compose.yml

@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  # Public relay with tunnel support
+  relay:
+    build: .
+    image: ghcr.io/octagono/skink:latest
+    container_name: skink-relay
+    restart: unless-stopped
+    ports:
+      - "9009-9013:9009-9013"    # file transfer relay
+      - "9090:9090"               # tunnel control port
+      - "9091:9091"               # tunnel data port
+      - "8080:8080"               # tunnel HTTP proxy
+    environment:
+      - SKINK_PASS=${SKINK_PASS:-changeme}
+      - SKINK_TUNNEL_PORT=9090
+      - SKINK_TUNNEL_HTTP_PORT=8080
+      - SKINK_TUNNEL_DOMAIN=${SKINK_TUNNEL_DOMAIN:-relay.example.com}
+      - SKINK_TUNNEL_ALLOWLIST=${SKINK_TUNNEL_ALLOWLIST:-}
+      - SKINK_TUNNEL_RATE_LIMIT=100
+      - SKINK_HEALTH_CHECK_INTERVAL=30
+      - SKINK_METRICS_PORT=9092
+    healthcheck:
+      test: ["CMD", "skink", "--help"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    volumes:
+      - skink-data:/root/.config/skink
+
+volumes:
+  skink-data:
