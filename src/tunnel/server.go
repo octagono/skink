@@ -211,6 +211,13 @@ func (s *Server) sendSyncToPeer(peer string, data []byte) {
 		return
 	}
 	defer conn.Close()
+	if s.password != "" {
+		h := sha256.Sum256([]byte(s.password))
+		enc, err := encryptAESGCM(data, h[:])
+		if err == nil {
+			data = enc
+		}
+	}
 	lenBuf := []byte{byte(len(data) >> 8), byte(len(data))}
 	if _, err := conn.Write(lenBuf); err != nil {
 		return
@@ -249,6 +256,13 @@ func (s *Server) handleSyncConn(conn net.Conn) {
 	data := make([]byte, length)
 	if _, err := io.ReadFull(conn, data); err != nil {
 		return
+	}
+	if s.password != "" {
+		h := sha256.Sum256([]byte(s.password))
+		dec, err := decryptAESGCM(data, h[:])
+		if err == nil {
+			data = dec
+		}
 	}
 	var msg TunnelSyncMessage
 	if err := json.Unmarshal(data, &msg); err != nil {

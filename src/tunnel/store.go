@@ -1,7 +1,12 @@
 package tunnel
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -29,12 +34,17 @@ type TunnelStore struct {
 	filePath string
 	tunnels  map[string]*PersistedTunnel
 	dirty    bool
+	encKey   []byte
 }
 
-func NewTunnelStore(filePath string) *TunnelStore {
+func NewTunnelStore(filePath string, password string) *TunnelStore {
 	s := &TunnelStore{
 		filePath: filePath,
 		tunnels:  make(map[string]*PersistedTunnel),
+	}
+	if password != "" {
+		h := sha256.Sum256([]byte(password))
+		s.encKey = h[:]
 	}
 	s.load()
 	return s
@@ -90,6 +100,13 @@ func (s *TunnelStore) load() {
 		log.Warnf("tunnel store: read %s: %v", s.filePath, err)
 		return
 	}
+	if s.encKey != nil {
+		data, err = s.decrypt(data)
+		if err != nil {
+			log.Warnf("tunnel store: decrypt %s: %v", s.filePath, err)
+			return
+		}
+	}
 	var tunnels []*PersistedTunnel
 	if err := json.Unmarshal(data, &tunnels); err != nil {
 		log.Warnf("tunnel store: decode %s: %v", s.filePath, err)
@@ -117,9 +134,15 @@ func (s *TunnelStore) flushLocked() error {
 	for _, t := range s.tunnels {
 		tunnels = append(tunnels, t)
 	}
-	data, err := json.MarshalIndent(tunnels, "", "  ")
+	data, err := json.Marshal(tunnels)
 	if err != nil {
 		return err
+	}
+	if s.encKey != nil {
+		data, err = s.encrypt(data)
+		if err != nil {
+			return err
+		}
 	}
 	tmpPath := s.filePath + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
@@ -130,4 +153,70 @@ func (s *TunnelStore) flushLocked() error {
 	}
 	s.dirty = false
 	return nil
+}
+
+func encryptAESGCM(plain, key []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("aes: %w", err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("gcm: %w", err)
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("nonce: %w", err)
+	}
+	return aead.Seal(nonce, nonce, plain, nil), nil
+}
+
+func decryptAESGCM(ciphertext, key []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("aes: %w", err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("gcm: %w", err)
+	}
+	nonceSize := aead.NonceSize()
+	if len(ciphertext) < nonceSize {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
+	return aead.Open(nil, nonce, ciphertext, nil)
+}
+
+func (s *TunnelStore) encrypt(plain []byte) ([]byte, error) {
+	block, err := aes.NewCipher(s.encKey)
+	if err != nil {
+		return nil, fmt.Errorf("aes: %w", err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("gcm: %w", err)
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("nonce: %w", err)
+	}
+	return aead.Seal(nonce, nonce, plain, nil), nil
+}
+
+func (s *TunnelStore) decrypt(ciphertext []byte) ([]byte, error) {
+	block, err := aes.NewCipher(s.encKey)
+	if err != nil {
+		return nil, fmt.Errorf("aes: %w", err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("gcm: %w", err)
+	}
+	nonceSize := aead.NonceSize()
+	if len(ciphertext) < nonceSize {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
+	return aead.Open(nil, nonce, ciphertext, nil)
 }

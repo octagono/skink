@@ -137,7 +137,8 @@ func Run() (err error) {
 				&cli.IntFlag{Name: "yamux-window", Value: 0, Usage: "yamux stream window size in bytes (0=default 16MB)", EnvVars: []string{"SKINK_YAMUX_WINDOW"}},
 				&cli.IntFlag{Name: "api-port", Value: 0, Usage: "port for REST API server (0=disabled, binds 127.0.0.1)", EnvVars: []string{"SKINK_API_PORT"}},
 				&cli.StringFlag{Name: "api-token", Value: "", Usage: "bearer token for REST API authentication (empty=no auth)", EnvVars: []string{"SKINK_API_TOKEN"}},
-				&cli.StringFlag{Name: "persist", Value: "", Usage: "path to persist tunnel state (tunnels survive relay restart)", EnvVars: []string{"SKINK_PERSIST"}},
+				&cli.StringFlag{Name: "persist", Value: "", Usage: "path to persist tunnel state (:memory: for in-memory only, encrypted with relay password on disk)", EnvVars: []string{"SKINK_PERSIST"}},
+				&cli.StringFlag{Name: "state-key", Value: "", Usage: "master key for state encryption (default: derived from relay password)", EnvVars: []string{"SKINK_STATE_KEY"}},
 				&cli.IntFlag{Name: "sync-port", Value: 0, Usage: "port for HA state sync between relays (0=disabled)", EnvVars: []string{"SKINK_SYNC_PORT"}},
 				&cli.StringFlag{Name: "sync-peers", Value: "", Usage: "comma-separated relay sync peers (host:port)", EnvVars: []string{"SKINK_SYNC_PEERS"}},
 			},
@@ -1022,8 +1023,12 @@ func relay(c *cli.Context) (err error) {
 		// tunnel.NewServer(host, port, password, relayDomain, httpPort, tcpPortBase)
 		srv := tunnel.NewServer("", tunnelPort, tunPass, tunnelDomain, tunnelHTTPPort, 10000)
 
-		if persistPath := c.String("persist"); persistPath != "" {
-			srv.SetStore(tunnel.NewTunnelStore(persistPath))
+		if persistPath := c.String("persist"); persistPath != "" && persistPath != ":memory:" {
+			stateKey := c.String("state-key")
+			if stateKey == "" {
+				stateKey = tunPass
+			}
+			srv.SetStore(tunnel.NewTunnelStore(persistPath, stateKey))
 		}
 
 		var syncPeers []string

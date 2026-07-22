@@ -7,6 +7,7 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/octagono/skink/src/comm"
@@ -404,13 +405,19 @@ const (
 )
 
 var (
-	paddingMin int = 0
-	paddingMax int = 0
+	paddingMin  int = 0
+	paddingMax  int = 0
+	paddingPool sync.Pool
 )
 
 func SetPadding(min, max int) {
 	paddingMin = min
 	paddingMax = max
+	paddingPool = sync.Pool{
+		New: func() interface{} {
+			return make([]byte, paddingMax)
+		},
+	}
 }
 
 func randomPadding() []byte {
@@ -424,9 +431,15 @@ func randomPadding() []byte {
 	if size <= 0 {
 		return nil
 	}
-	b := make([]byte, size)
-	rand.Read(b)
-	return b
+	buf := paddingPool.Get().([]byte)
+	if len(buf) < size {
+		buf = make([]byte, size)
+	}
+	rand.Read(buf[:size])
+	result := make([]byte, size)
+	copy(result, buf[:size])
+	paddingPool.Put(buf)
+	return result
 }
 
 func SendTunnelMessage(c *comm.Comm, key []byte, msgType message.Type, payload interface{}) error {
