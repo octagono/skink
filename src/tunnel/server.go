@@ -892,16 +892,12 @@ func (s *Server) handleTunnelRegister(c *comm.Comm, key []byte, payload []byte, 
 	tunnelID := generateTunnelID()
 
 	// Handle subdomain
-	subdomain := reg.Subdomain
+	subdomain := strings.ToLower(reg.Subdomain)
 	if subdomain == "" {
 		subdomain = generateSubdomain()
 	}
 
-	// Token: use client-supplied, otherwise auto-generate
-	token := reg.Token
-	if token == "" && reg.Password == "" {
-		token = generateToken() // auto-generate when no auth provided
-	}
+	token := strings.TrimSpace(reg.Token)
 
 	// Generate access token for private tunnels
 	var accessToken string
@@ -1472,7 +1468,7 @@ func generateAccessToken() string {
 func generateSubdomain() string {
 	b := make([]byte, 4)
 	rand.Read(b)
-	return "Skink-" + hex.EncodeToString(b)
+	return "skink-" + hex.EncodeToString(b)
 }
 
 func generateProxyID() string {

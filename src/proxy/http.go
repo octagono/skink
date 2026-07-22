@@ -464,23 +464,19 @@ func isTimeoutError(err error) bool {
 // extractSubdomain extracts the subdomain from a Host header.
 // For "myapp.tunnel.example.com" with domain "tunnel.example.com", returns "myapp".
 func extractSubdomain(host, domain string) string {
-	// Strip port
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
 	}
-
-	// Remove the domain suffix
+	host = strings.ToLower(host)
+	domain = strings.ToLower(domain)
 	if !strings.HasSuffix(host, domain) {
 		return ""
 	}
-
 	subdomain := strings.TrimSuffix(host, domain)
 	subdomain = strings.TrimSuffix(subdomain, ".")
-
 	if subdomain == "" || strings.Contains(subdomain, ".") {
 		return ""
 	}
-
 	return subdomain
 }
 
