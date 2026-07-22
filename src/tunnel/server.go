@@ -58,6 +58,7 @@ type Server struct {
 	tcpPortBase int
 	registry    *Registry
 	metrics     *Metrics
+	store       *TunnelStore // persisted tunnel state, nil if not enabled
 
 	// next available TCP port for TCP tunnels
 	tcpPortMu   sync.Mutex
@@ -87,9 +88,13 @@ type Server struct {
 	// Configurable yamux window size (bytes)
 	yamuxWindowSize int
 
-	// REST API server (optional, started via AddAPIServer)
 	apiServer *APIServer
 	apiToken  string
+
+	// HA sync peers
+	syncPeers    []string
+	syncPort     int
+	syncListener net.Listener
 }
 
 // NewServer creates a new tunnel server.
@@ -116,6 +121,10 @@ func NewServer(host string, port int, password, relayDomain string, httpPort, tc
 	s.registry.SetEventHandler(&TunnelEventHandlerFunc{
 		UnregisterFn: func(entry *TunnelEntry) {
 			s.metrics.RecordTunnelUnregistered()
+			if s.store != nil {
+				s.store.Delete(entry.ID)
+			}
+			s.pushSync(entry.ID, "unregister")
 			if s.eventHandler != nil {
 				s.eventHandler.OnTunnelUnregister(entry)
 			}
@@ -146,6 +155,140 @@ func (s *Server) SetUpstream(addr string) error {
 	s.relayHop = hop
 	log.Infof("relay hopping enabled: upstream %s", addr)
 	return nil
+}
+
+func (s *Server) SetStore(store *TunnelStore) {
+	s.store = store
+}
+
+func (s *Server) SetSync(peers []string, syncPort int) {
+	s.syncPeers = peers
+	s.syncPort = syncPort
+}
+
+func (s *Server) pushSync(tunnelID string, action string) {
+	if len(s.syncPeers) == 0 {
+		return
+	}
+	var msg TunnelSyncMessage
+	msg.Action = action
+	msg.RelayAddr = fmt.Sprintf("%s:%d", s.host, s.port)
+	if action == "register" {
+		entry := s.registry.LookupByID(tunnelID)
+		if entry == nil {
+			return
+		}
+		msg.Tunnel = &PersistedTunnel{
+			TunnelID:    entry.ID,
+			Subdomain:   entry.Subdomain,
+			Type:        entry.Type,
+			LocalAddr:   entry.LocalAddr,
+			Password:    entry.Password,
+			Token:       entry.Token,
+			AccessToken: entry.AccessToken,
+			Private:     entry.Private,
+			PublicPort:  entry.PublicPort,
+			RemoteAddr:  entry.RemoteAddr,
+			CreatedAt:   entry.CreatedAt,
+		}
+		msg.TunnelID = entry.ID
+	} else {
+		msg.TunnelID = tunnelID
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return
+	}
+	for _, peer := range s.syncPeers {
+		go s.sendSyncToPeer(peer, data)
+	}
+}
+
+func (s *Server) sendSyncToPeer(peer string, data []byte) {
+	conn, err := net.DialTimeout("tcp", peer, 5*time.Second)
+	if err != nil {
+		log.Debugf("sync dial peer %s: %v", peer, err)
+		return
+	}
+	defer conn.Close()
+	lenBuf := []byte{byte(len(data) >> 8), byte(len(data))}
+	if _, err := conn.Write(lenBuf); err != nil {
+		return
+	}
+	if _, err := conn.Write(data); err != nil {
+		return
+	}
+}
+
+func (s *Server) syncAcceptLoop() {
+	defer s.wg.Done()
+	for {
+		conn, err := s.syncListener.Accept()
+		if err != nil {
+			select {
+			case <-s.quit:
+				return
+			default:
+				continue
+			}
+		}
+		go s.handleSyncConn(conn)
+	}
+}
+
+func (s *Server) handleSyncConn(conn net.Conn) {
+	defer conn.Close()
+	var lenBuf [2]byte
+	if _, err := io.ReadFull(conn, lenBuf[:]); err != nil {
+		return
+	}
+	length := int(lenBuf[0])<<8 | int(lenBuf[1])
+	if length > 1<<20 {
+		return
+	}
+	data := make([]byte, length)
+	if _, err := io.ReadFull(conn, data); err != nil {
+		return
+	}
+	var msg TunnelSyncMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return
+	}
+	switch msg.Action {
+	case "register":
+		if msg.Tunnel == nil {
+			return
+		}
+		pt := msg.Tunnel
+		entry := &TunnelEntry{
+			ID:          pt.TunnelID,
+			Subdomain:   pt.Subdomain,
+			Type:        pt.Type,
+			LocalAddr:   pt.LocalAddr,
+			Password:    pt.Password,
+			Token:       pt.Token,
+			AccessToken: pt.AccessToken,
+			Private:     pt.Private,
+			PublicPort:  pt.PublicPort,
+			RemoteAddr:  pt.RemoteAddr,
+			CreatedAt:   pt.CreatedAt,
+			LastSeen:    time.Now(),
+		}
+		if err := s.registry.Register(entry); err != nil {
+			log.Debugf("sync register tunnel %s: %v", pt.TunnelID, err)
+			return
+		}
+		if s.store != nil {
+			s.store.Save(pt)
+		}
+		log.Debugf("sync: tunnel %s registered from %s", pt.Subdomain, msg.RelayAddr)
+	case "unregister":
+		s.registry.Unregister(msg.TunnelID)
+		if s.store != nil {
+			s.store.Delete(msg.TunnelID)
+		}
+		log.Debugf("sync: tunnel %s unregistered from %s", msg.TunnelID, msg.RelayAddr)
+	}
 }
 
 // SetPipeName configures the named pipe name for Windows SMB transport.
@@ -227,10 +370,52 @@ func (s *Server) Start() error {
 		log.Infof("tunnel server WSS on %s%s", wsAddr, WSPath)
 	}
 
+	// Restore persisted tunnels from the store.
+	if s.store != nil {
+		for _, pt := range s.store.LoadAll() {
+			entry := &TunnelEntry{
+				ID:          pt.TunnelID,
+				Subdomain:   pt.Subdomain,
+				Type:        pt.Type,
+				LocalAddr:   pt.LocalAddr,
+				Password:    pt.Password,
+				Token:       pt.Token,
+				AccessToken: pt.AccessToken,
+				Private:     pt.Private,
+				PublicPort:  pt.PublicPort,
+				RemoteAddr:  pt.RemoteAddr,
+				CreatedAt:   pt.CreatedAt,
+				LastSeen:    time.Now(),
+			}
+			if err := s.registry.Register(entry); err != nil {
+				log.Warnf("restore tunnel %s: %v", pt.TunnelID, err)
+				s.store.Delete(pt.TunnelID)
+				continue
+			}
+			if s.eventHandler != nil {
+				s.eventHandler.OnTunnelRegister(entry)
+			}
+			s.metrics.RecordTunnelRegistered()
+			log.Infof("restored tunnel: %s (%s) → %s", pt.Subdomain, pt.Type, pt.LocalAddr)
+		}
+	}
+
+	if s.syncPort > 0 {
+		addr := fmt.Sprintf(":%d", s.syncPort)
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			log.Warnf("sync listen on %s: %v", addr, err)
+		} else {
+			s.syncListener = ln
+			s.wg.Add(1)
+			go s.syncAcceptLoop()
+			log.Infof("sync listener on %s", addr)
+		}
+	}
+
 	return nil
 }
 
-// Stop gracefully shuts down the tunnel server.
 func (s *Server) Stop() {
 	close(s.quit)
 	if s.relayHop != nil {
@@ -238,6 +423,9 @@ func (s *Server) Stop() {
 	}
 	if s.listener != nil {
 		s.listener.Close()
+	}
+	if s.syncListener != nil {
+		s.syncListener.Close()
 	}
 	if s.dataListener != nil {
 		s.dataListener.Close()
@@ -249,6 +437,9 @@ func (s *Server) Stop() {
 		s.pipeListener.Close()
 	}
 	s.wg.Wait()
+	if s.store != nil {
+		s.store.Close()
+	}
 	log.Info("tunnel server stopped")
 }
 
@@ -322,31 +513,30 @@ func (s *Server) handleConnection(rawConn net.Conn) {
 	defer s.wg.Done()
 	defer rawConn.Close()
 
-	// Apply TCP optimizations (P2 perf)
 	applyProxyTCPOptions(rawConn)
 
 	c := comm.New(rawConn)
 
-	// PAKE handshake for relay authentication
 	key, err := s.pakeHandshake(c)
 	if err != nil {
 		log.Debugf("tunnel PAKE handshake failed: %v", err)
 		return
 	}
 
-	// Expect a TunnelRegister message
 	msgType, payload, err := ReceiveTunnelMessage(c, key)
 	if err != nil {
-		log.Debugf("tunnel receive register failed: %v", err)
+		log.Debugf("tunnel receive message failed: %v", err)
 		return
 	}
 
-	if msgType != message.TypeTunnelRegister {
-		log.Debugf("expected tunnel-register, got %s", msgType)
-		return
+	switch msgType {
+	case message.TypeTunnelRegister:
+		s.handleTunnelRegister(c, key, payload, rawConn)
+	case message.TypeTunnelResume:
+		s.handleTunnelResume(c, key, payload)
+	default:
+		log.Debugf("expected tunnel-register or tunnel-resume, got %s", msgType)
 	}
-
-	s.handleTunnelRegister(c, key, payload, rawConn)
 }
 
 // dataAcceptLoop accepts proxy data connections on the data port.
@@ -716,9 +906,13 @@ func (s *Server) handleTunnelRegister(c *comm.Comm, key []byte, payload []byte, 
 		ControlKey:  key,
 		CreatedAt:   time.Now(),
 		LastSeen:    time.Now(),
+		MaxConns:    reg.MaxConns,
 	}
 
-	// Allocate resources based on tunnel type
+	if reg.BandwidthLimit > 0 || reg.IdleTimeout > 0 {
+		entry.BandwidthLimit = reg.BandwidthLimit
+		entry.IdleTimeout = reg.IdleTimeout
+	}
 	switch reg.Type {
 	case TunnelTypeHTTP:
 		if reg.Private {
@@ -753,13 +947,31 @@ func (s *Server) handleTunnelRegister(c *comm.Comm, key []byte, payload []byte, 
 		return
 	}
 
-	// Notify event handler (starts TCP proxy, etc.)
 	if s.eventHandler != nil {
 		s.eventHandler.OnTunnelRegister(entry)
 	}
 	s.metrics.RecordTunnelRegistered()
 
-	// Register with upstream relay if configured
+	if s.store != nil {
+		pt := &PersistedTunnel{
+			TunnelID:    tunnelID,
+			Subdomain:   subdomain,
+			Type:        reg.Type,
+			LocalAddr:   reg.LocalAddr,
+			Password:    reg.Password,
+			Token:       token,
+			AccessToken: accessToken,
+			Private:     reg.Private,
+			PublicPort:  entry.PublicPort,
+			RemoteAddr:  entry.RemoteAddr,
+			CreatedAt:   time.Now(),
+		}
+		if err := s.store.Save(pt); err != nil {
+			log.Warnf("persist tunnel %s: %v", tunnelID, err)
+		}
+	}
+	s.pushSync(tunnelID, "register")
+
 	if s.relayHop != nil && entry.Type != TunnelTypeHTTP {
 		if err := s.relayHop.RegisterTunnel(entry); err != nil {
 			log.Warnf("upstream register tunnel %s: %v", entry.Subdomain, err)
@@ -796,8 +1008,89 @@ func (s *Server) handleTunnelRegister(c *comm.Comm, key []byte, payload []byte, 
 	s.controlLoop(c, key, entry)
 }
 
-// controlLoop handles messages on the tunnel control connection.
-// Uses a dedicated receive goroutine to avoid busy-polling with read deadlines.
+func (s *Server) handleTunnelResume(c *comm.Comm, key []byte, payload []byte) {
+	var resume TunnelResumeMessage
+	if err := DecodePayload(payload, &resume); err != nil {
+		log.Debugf("decode tunnel resume failed: %v", err)
+		return
+	}
+	if s.store == nil {
+		SendTunnelMessage(c, key, message.TypeTunnelError, TunnelErrorMessage{
+			Message: "session persistence not enabled on relay",
+			Code:    501,
+		})
+		return
+	}
+	pt := s.store.Lookup(resume.TunnelID)
+	if pt == nil {
+		SendTunnelMessage(c, key, message.TypeTunnelError, TunnelErrorMessage{
+			Message: "no such tunnel",
+			Code:    404,
+		})
+		return
+	}
+	if pt.Token != "" && pt.Token != resume.Token {
+		SendTunnelMessage(c, key, message.TypeTunnelError, TunnelErrorMessage{
+			Message: "token mismatch",
+			Code:    401,
+		})
+		return
+	}
+	entry := s.registry.LookupByID(resume.TunnelID)
+	if entry != nil {
+		if entry.ControlConn != nil {
+			entry.ControlConn.Close()
+		}
+		s.registry.Unregister(resume.TunnelID)
+	}
+	entry = &TunnelEntry{
+		ID:          pt.TunnelID,
+		Subdomain:   pt.Subdomain,
+		Type:        pt.Type,
+		LocalAddr:   pt.LocalAddr,
+		Password:    pt.Password,
+		Token:       pt.Token,
+		AccessToken: pt.AccessToken,
+		Private:     pt.Private,
+		PublicPort:  pt.PublicPort,
+		RemoteAddr:  pt.RemoteAddr,
+		ControlConn: c,
+		ControlKey:  key,
+		CreatedAt:   pt.CreatedAt,
+		LastSeen:    time.Now(),
+	}
+	if err := s.registry.Register(entry); err != nil {
+		SendTunnelMessage(c, key, message.TypeTunnelError, TunnelErrorMessage{
+			Message: err.Error(),
+			Code:    409,
+		})
+		return
+	}
+	if s.eventHandler != nil {
+		s.eventHandler.OnTunnelRegister(entry)
+	}
+	s.metrics.RecordTunnelRegistered()
+	info := TunnelInfo{
+		TunnelID:    pt.TunnelID,
+		PublicURL:   pt.RemoteAddr,
+		Subdomain:   pt.Subdomain,
+		AssignedAt:  time.Now().Format(time.RFC3339),
+		Token:       pt.Token,
+		AccessToken: pt.AccessToken,
+	}
+	if pt.Type == TunnelTypeTCP || pt.Type == TunnelTypeUDP || pt.Type == TunnelTypeSOCKS5 {
+		info.PublicPort = pt.PublicPort
+		info.RemoteAddr = pt.RemoteAddr
+	}
+	if err := SendTunnelMessage(c, key, message.TypeTunnelRegistered, info); err != nil {
+		log.Errorf("tunnel send resume response failed: %v", err)
+		s.registry.Unregister(pt.TunnelID)
+		return
+	}
+	log.Infof("tunnel resumed: %s (%s) → %s [%s]", pt.Subdomain, pt.Type, pt.LocalAddr, pt.TunnelID)
+	s.controlLoop(c, key, entry)
+}
+
 func (s *Server) controlLoop(c *comm.Comm, key []byte, entry *TunnelEntry) {
 	hbCfg := DefaultHeartbeatConfig()
 	ticker := time.NewTicker(hbCfg.NextInterval())

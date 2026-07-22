@@ -117,6 +117,99 @@ skink tunnel --server relay:9090 --access a1b2c3d4... --local localhost:2222
 - Works with all tunnel types (TCP, HTTP, UDP)
 - Bridge uses existing yamux multiplexing through the relay data port
 
+### Session resumption & persistence
+
+Tunnels survive relay restarts. The relay persists state to a JSON file; clients
+reconnect with their saved tunnel ID instead of re-registering.
+
+```bash
+# Relay: persist tunnel state so tunnels survive restart
+skink relay --tunnel-port 9090 --persist /var/lib/skink/state.json
+
+# Client: reconnect with saved tunnel ID (instead of fresh registration)
+skink tunnel --server relay:9090 --type http --local localhost:3000 --resume /tmp/tunnel-resume.json
+```
+
+When the client reconnects after a network drop or relay restart, it sends the
+saved tunnel ID. The relay looks up the persisted state and resumes without
+requiring re-registration. If resume fails (relay has no such tunnel), the client
+falls back to a fresh registration automatically.
+
+### Relay HA clustering
+
+Run multiple relays that share tunnel state. When a tunnel registers or
+unregisters on one relay, it syncs to all peers.
+
+```bash
+# Relay A (primary)
+skink relay --tunnel-port 9090 --persist /shared/skink.json --sync-port 9400
+
+# Relay B (backup) — syncs with A
+skink relay --tunnel-port 9091 --persist /shared/skink.json --sync-port 9401 \
+  --sync-peers relayA:9400
+
+# Client: comma-separated server failover list
+skink tunnel --server relayA:9090,relayB:9091 --resume /tmp/resume.json --type tcp --local :22
+```
+
+The client tries each server in order. With shared state and `--resume`, the
+tunnel reconnects to whichever relay is available.
+
+### Per-tunnel resource controls
+
+Set connection limits, bandwidth caps, and idle timeouts per tunnel:
+
+```bash
+skink tunnel --server relay:9090 --type tcp --local :22 \
+  --max-connections 10 --bandwidth-limit 1048576 --idle-timeout 300
+```
+
+Limits are sent in the tunnel registration and enforced by the relay:
+- `--max-connections`: concurrent proxy connection cap (0=unlimited)
+- `--bandwidth-limit`: bytes/sec per tunnel (0=unlimited)
+- `--idle-timeout`: proxy connection idle timeout in seconds (0=default 30s)
+
+### Dynamic split tunneling
+
+Route traffic through the tunnel or bypass it using domain names or CIDRs.
+Supports wildcard domains, exact domains, and CIDR notation in the same rules:
+
+```bash
+# Route corporate CIDRs and domains through the tunnel; bypass everything else
+skink tunnel --server relay:9090 --type socks5 \
+  --route 10.0.0.0/8,*.corp.internal,*.sso.corp.com \
+  --bypass 0.0.0.0/0,*.public-cdn.com
+```
+
+Domain patterns (`*.example.com`) are checked before DNS resolution. If the
+destination domain matches a route or bypass pattern, the decision is made
+immediately without resolving.
+
+### Traffic obfuscation
+
+Random padding per message makes traffic analysis harder. Combine with
+heartbeat jitter for stealth:
+
+```bash
+skink tunnel --server relay:9090 --type socks5 \
+  --padding-min 64 --padding-max 1024 --heartbeat-jitter 0.4
+```
+
+Padding is applied to every tunnel control message. The relay strips padding
+before processing. Timing jitter on heartbeats (±40% with --heartbeat-jitter 0.4)
+makes beaconing detection difficult.
+
+### Message integrity verification
+
+Optional HMAC-SHA256 per tunnel message detects tampering:
+
+```bash
+skink tunnel --server relay:9090 --type tcp --local :22 --integrity
+```
+
+Adds an HMAC tag to every control message. The relay verifies each message
+before processing. Integrity key is derived from the PAKE session key.
+
 ### REST API
 
 Manage tunnels programmatically via a local HTTP API on the relay.

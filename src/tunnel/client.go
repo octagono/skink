@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -215,7 +217,6 @@ func (c *Client) Stop() {
 		close(c.quit)
 	})
 
-	// Send close message if connected
 	if c.controlConn != nil {
 		SendTunnelMessage(c.controlConn, c.controlKey, message.TypeTunnelClose, TunnelCloseMessage{
 			TunnelID: c.tunnelID,
@@ -224,6 +225,7 @@ func (c *Client) Stop() {
 	}
 
 	c.wg.Wait()
+	c.clearResumeState()
 }
 
 // State returns the current tunnel state.
@@ -532,44 +534,65 @@ func (c *Client) setState(state TunnelState) {
 	c.state = state
 }
 
-// connect establishes the control connection to the tunnel server.
 func (c *Client) connect() error {
-	// Parse server address
-	serverAddr := c.config.ServerAddr
-	if serverAddr == "" {
+	addrs := c.parseServerAddresses()
+	if len(addrs) == 0 {
 		return fmt.Errorf("server address required")
 	}
+	var lastErr error
+	for _, addr := range addrs {
+		if err := c.tryConnect(addr); err == nil {
+			return nil
+		} else {
+			lastErr = err
+			log.Debugf("connect to %s failed: %v", addr, err)
+		}
+	}
+	return fmt.Errorf("all tunnel servers unreachable: %w", lastErr)
+}
 
-	// Handle named pipe transport (Windows SMB lateral movement)
+func (c *Client) parseServerAddresses() []string {
+	raw := c.config.ServerAddr
+	if raw == "" {
+		return nil
+	}
+	var addrs []string
+	for _, a := range strings.Split(raw, ",") {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			continue
+		}
+		if HasWSSPrefix(a) {
+			addrs = append(addrs, a)
+			continue
+		}
+		if _, _, err := net.SplitHostPort(a); err != nil {
+			a = net.JoinHostPort(a, fmt.Sprint(DefaultTunnelPort))
+		}
+		addrs = append(addrs, a)
+	}
+	return addrs
+}
+
+func (c *Client) tryConnect(serverAddr string) error {
 	if c.config.Transport == "pipe" {
 		return c.connectPipe()
 	}
-
-	// Handle WebSocket transport
 	if HasWSSPrefix(serverAddr) {
 		return c.connectWS(serverAddr)
 	}
-
-	// Add default port if not specified
 	_, portStr, err := net.SplitHostPort(serverAddr)
-	if err != nil {
-		serverAddr = net.JoinHostPort(serverAddr, fmt.Sprint(DefaultTunnelPort))
-	} else {
+	if err == nil {
 		var port int
 		fmt.Sscanf(portStr, "%d", &port)
 		c.dataPort = port + 1
 	}
-
 	log.Debugf("connecting to tunnel server at %s", serverAddr)
-
-	// Establish TCP connection (optionally wrapped in TLS)
 	var tcpConn net.Conn
 	tcpConn, err = comm.Dial(serverAddr, 10*time.Second)
 	if err != nil {
 		return fmt.Errorf("dial tunnel server: %w", err)
 	}
-
-	// Optionally wrap in TLS
 	if c.config.TLS.Enable {
 		tlsConn, err := wrapTLS(tcpConn, serverAddr, c.config.TLS)
 		if err != nil {
@@ -578,42 +601,70 @@ func (c *Client) connect() error {
 		}
 		tcpConn = tlsConn
 	}
-
 	c.controlConn = comm.New(tcpConn)
-
-	// PAKE handshake
 	key, err := c.pakeHandshake(c.controlConn)
 	if err != nil {
 		c.controlConn.Close()
 		c.controlConn = nil
 		return fmt.Errorf("pake handshake: %w", err)
 	}
-
 	c.controlKey = key
 
-	// Send tunnel registration
-	reg := TunnelRegistration{
-		Subdomain: c.config.Subdomain,
-		LocalAddr: c.config.LocalAddr,
-		Type:      c.config.TunnelType,
-		Password:  c.config.Password,
-		Token:     c.config.Token,
+	if c.config.ResumeFile != "" {
+		resumeID, resumeToken := c.loadResumeState()
+		if resumeID != "" {
+			rm := TunnelResumeMessage{TunnelID: resumeID, Token: resumeToken}
+			if err := SendTunnelMessage(c.controlConn, c.controlKey, message.TypeTunnelResume, rm); err != nil {
+				c.controlConn.Close()
+				c.controlConn = nil
+				return fmt.Errorf("send tunnel resume: %w", err)
+			}
+			msgType, payload, err := ReceiveTunnelMessage(c.controlConn, c.controlKey)
+			if err != nil {
+				c.controlConn.Close()
+				c.controlConn = nil
+				return fmt.Errorf("receive resume response: %w", err)
+			}
+			if msgType == message.TypeTunnelRegistered {
+				var info TunnelInfo
+				if err := DecodePayload(payload, &info); err != nil {
+					c.controlConn.Close()
+					c.controlConn = nil
+					return fmt.Errorf("decode resume info: %w", err)
+				}
+				c.tunnelID = info.TunnelID
+				c.publicURL = info.PublicURL
+				c.subdomain = info.Subdomain
+				c.token = info.Token
+				log.Infof("tunnel resumed: %s → %s", info.PublicURL, c.config.LocalAddr)
+				return nil
+			}
+			c.clearResumeState()
+			log.Debugf("tunnel resume rejected, registering fresh")
+		}
 	}
 
+	reg := TunnelRegistration{
+		Subdomain:      c.config.Subdomain,
+		LocalAddr:      c.config.LocalAddr,
+		Type:           c.config.TunnelType,
+		Password:       c.config.Password,
+		Token:          c.config.Token,
+		MaxConns:       c.config.MaxConns,
+		BandwidthLimit: c.config.BandwidthLimit,
+		IdleTimeout:    c.config.IdleTimeout,
+	}
 	if err := SendTunnelMessage(c.controlConn, c.controlKey, message.TypeTunnelRegister, reg); err != nil {
 		c.controlConn.Close()
 		c.controlConn = nil
 		return fmt.Errorf("send tunnel register: %w", err)
 	}
-
-	// Wait for response
 	msgType, payload, err := ReceiveTunnelMessage(c.controlConn, c.controlKey)
 	if err != nil {
 		c.controlConn.Close()
 		c.controlConn = nil
 		return fmt.Errorf("receive tunnel response: %w", err)
 	}
-
 	switch msgType {
 	case message.TypeTunnelRegistered:
 		var info TunnelInfo
@@ -622,34 +673,26 @@ func (c *Client) connect() error {
 			c.controlConn = nil
 			return fmt.Errorf("decode tunnel info: %w", err)
 		}
-
 		c.tunnelID = info.TunnelID
 		c.publicURL = info.PublicURL
 		c.subdomain = info.Subdomain
 		c.token = info.Token
-
 		log.Infof("tunnel established: %s → %s", info.PublicURL, c.config.LocalAddr)
 		if info.Token != "" {
 			log.Infof("auth token: %s", info.Token)
 		}
-
-	case message.TypeTunnelError:
-		var errMsg TunnelErrorMessage
-		if err := DecodePayload(payload, &errMsg); err == nil {
-			c.controlConn.Close()
-			c.controlConn = nil
-			return fmt.Errorf("tunnel registration failed (code %d): %s", errMsg.Code, errMsg.Message)
+		if c.config.ResumeFile != "" {
+			c.saveResumeState(info.TunnelID, info.Token)
 		}
+	case message.TypeTunnelError:
 		c.controlConn.Close()
 		c.controlConn = nil
 		return fmt.Errorf("tunnel registration failed")
-
 	default:
 		c.controlConn.Close()
 		c.controlConn = nil
 		return fmt.Errorf("unexpected response type: %s", msgType)
 	}
-
 	return nil
 }
 
@@ -697,11 +740,14 @@ func (c *Client) connectWS(addr string) error {
 
 	// Send tunnel registration
 	reg := TunnelRegistration{
-		Subdomain: c.config.Subdomain,
-		LocalAddr: c.config.LocalAddr,
-		Type:      c.config.TunnelType,
-		Password:  c.config.Password,
-		Token:     c.config.Token,
+		Subdomain:      c.config.Subdomain,
+		LocalAddr:      c.config.LocalAddr,
+		Type:           c.config.TunnelType,
+		Password:       c.config.Password,
+		Token:          c.config.Token,
+		MaxConns:       c.config.MaxConns,
+		BandwidthLimit: c.config.BandwidthLimit,
+		IdleTimeout:    c.config.IdleTimeout,
 	}
 
 	if err := SendTunnelMessage(c.controlConn, c.controlKey, message.TypeTunnelRegister, reg); err != nil {
@@ -783,11 +829,14 @@ func (c *Client) connectPipe() error {
 
 	// Register tunnel
 	reg := TunnelRegistration{
-		Subdomain: c.config.Subdomain,
-		LocalAddr: c.config.LocalAddr,
-		Type:      c.config.TunnelType,
-		Password:  c.config.Password,
-		Token:     c.config.Token,
+		Subdomain:      c.config.Subdomain,
+		LocalAddr:      c.config.LocalAddr,
+		Type:           c.config.TunnelType,
+		Password:       c.config.Password,
+		Token:          c.config.Token,
+		MaxConns:       c.config.MaxConns,
+		BandwidthLimit: c.config.BandwidthLimit,
+		IdleTimeout:    c.config.IdleTimeout,
 	}
 
 	if err := SendTunnelMessage(c.controlConn, c.controlKey, message.TypeTunnelRegister, reg); err != nil {
@@ -1410,4 +1459,38 @@ func (c *Client) accessHandleConn(session *yamux.Session, localConn net.Conn, ac
 		localConn.Close()
 	}()
 	wg.Wait()
+}
+
+func (c *Client) clearResumeState() {
+	if c.config.ResumeFile != "" {
+		os.Remove(c.config.ResumeFile)
+	}
+}
+
+type resumeState struct {
+	TunnelID string `json:"tunnel_id"`
+	Token    string `json:"token"`
+}
+
+func (c *Client) loadResumeState() (string, string) {
+	data, err := os.ReadFile(c.config.ResumeFile)
+	if err != nil {
+		return "", ""
+	}
+	var rs resumeState
+	if err := json.Unmarshal(data, &rs); err != nil {
+		return "", ""
+	}
+	return rs.TunnelID, rs.Token
+}
+
+func (c *Client) saveResumeState(tunnelID, token string) {
+	rs := resumeState{TunnelID: tunnelID, Token: token}
+	data, err := json.Marshal(rs)
+	if err != nil {
+		return
+	}
+	if err := os.WriteFile(c.config.ResumeFile, data, 0o600); err != nil {
+		log.Warnf("save resume state: %v", err)
+	}
 }

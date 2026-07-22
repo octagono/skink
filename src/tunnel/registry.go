@@ -12,22 +12,24 @@ import (
 
 // TunnelEntry holds all state for an active tunnel.
 type TunnelEntry struct {
-	ID          string
-	Subdomain   string
-	Type        TunnelType
-	LocalAddr   string
-	Password    string
-	Token       string // bearer token for HTTP auth (alternative to Password)
-	AccessToken string // access token for private tunnel sharing (no public port)
-	Private     bool   // private mode: no public port, access by token only
-	ControlConn *comm.Comm
-	ControlKey  []byte
-	CreatedAt   time.Time
-	LastSeen    time.Time
-	PublicPort  int
-	RemoteAddr  string // assigned public TCP address for TCP tunnels
-	MaxConns    int    // max concurrent proxy connections (0 = unlimited)
-	HealthURL   string // optional health check URL
+	ID             string
+	Subdomain      string
+	Type           TunnelType
+	LocalAddr      string
+	Password       string
+	Token          string // bearer token for HTTP auth (alternative to Password)
+	AccessToken    string // access token for private tunnel sharing (no public port)
+	Private        bool   // private mode: no public port, access by token only
+	ControlConn    *comm.Comm
+	ControlKey     []byte
+	CreatedAt      time.Time
+	LastSeen       time.Time
+	PublicPort     int
+	RemoteAddr     string // assigned public TCP address for TCP tunnels
+	MaxConns       int    // max concurrent proxy connections (0 = unlimited)
+	BandwidthLimit int64  // bytes/sec, 0=unlimited
+	IdleTimeout    int    // proxy connection idle timeout in seconds, 0=default (30s)
+	HealthURL      string // optional health check URL
 
 	// Concurrency semaphore (initialized lazily when MaxConns > 0)
 	connSem chan struct{}

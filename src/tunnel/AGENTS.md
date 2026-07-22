@@ -29,6 +29,9 @@ This package owns all tunnel protocol logic:
 - `metrics.go` — Prometheus `/metrics` handler, tunnel/proxy/byte counters.
 - `reloader.go` — `ConfigReloader` for JSON tunnel defs, `YAMLConfigWatcher` for hot-reload of YAML client config.
 - `secret.go` — `SecretSource` interface with `FileSource`/`ExecSource`/`StaticSource` implementations.
+- `store.go` — `TunnelStore` for JSON-backed tunnel state persistence with atomic writes. Used by `--persist` flag on relay. `PersistedTunnel` struct preserves tunnel identity across restarts.
+- `integrity.go` — `integrityConn` net.Conn wrapper that adds HMAC-SHA256 tags to every read/write. Used by `--integrity` flag on tunnel subcommand.
+- `protocol.go` also contains: `TunnelResumeMessage` (session resumption), `TunnelSyncMessage` (HA peer sync), `SetPadding`/`randomPadding` (traffic obfuscation), extended `RouteRule` with domain pattern matching (`*.example.com`).
 
 ## Local Contracts
 
@@ -44,13 +47,18 @@ This package owns all tunnel protocol logic:
 - **Buffer pool** — `copyBufferPool` (`sync.Pool` of 32KB `[]byte` slices) in `server.go`. All hot-path data copying uses `io.CopyBuffer` with pooled buffers via `getCopyBuf()`/`putCopyBuf()`. Returns buffers to pool after use.
 - **HTTP local connection pool** — `client.go` `localConnPool` (max 16 idle, 30s idle timeout) reuses TCP connections to `config.LocalAddr` for `TunnelTypeHTTP`. Initialized in `NewClient` only for HTTP tunnels; closed in `cleanup()`. TCP/UDP/SOCKS5 tunnels dial fresh per request. `handleProxyRequest` returns the connection via `Put` after bidirectional copy completes.
 - **`--yamux-window` flag** — `config.YamuxWindowSize` overrides the default 16MB `MaxStreamWindowSize` in both client data-session paths (`ensureDataSession`, `getOrCreateDataSession`) and server `handleDataSession`. Guard is `if c.config.YamuxWindowSize > 0`.
+- **Session resumption** — `--resume PATH` on client saves tunnel ID + token to JSON after registration. On reconnect, sends `TypeTunnelResume` with saved ID. Relay looks up `PersistedTunnel` in store and resumes. Falls back to fresh registration if resume fails.
+- **HA peer sync** — `--sync-port PORT` and `--sync-peers host:port` enable relay-to-relay state sync. On register/unregister, `pushSync()` sends length-prefixed JSON to each peer via TCP. Peers call `handleSyncConn()` which updates registry + store.
+- **Resource controls** — `TunnelRegistration` includes `MaxConns`, `BandwidthLimit`, `IdleTimeout`. Relay stores on `TunnelEntry`. `AcquireConn`/`ReleaseConn` enforce `MaxConns` in `RequestProxy`.
+- **Dynamic routing** — `RouteRule` supports domain patterns (`*.example.com`) in addition to CIDRs. Domains are matched before DNS resolution.
+- **Traffic padding** — `SetPadding(min, max)` adds random bytes to every `SendTunnelMessage`. Padding is stripped in `ReceiveTunnelMessage` before decompression.
 - **Fuzz testing** — Run `make fuzz` for 30s per target. Fuzz targets in `fuzz_test.go`, `config_fuzz_test.go`, `comm/fuzz_test.go`, `mnemonicode/fuzz_test.go`.
 
 ## Work Guidance
 
 - When modifying the proxy connection flow, ensure the data port protocol (2-byte length + prefix on stream) stays in sync between `client.go` and `server.go`'s `handleDataStream`.
 - **yamux config: `cfg.LogOutput` must be `io.Discard`, never `nil`.** yamux v0.1.2 `VerifyConfig` rejects sessions where both `Logger` and `LogOutput` are nil (`"one of Logger or LogOutput must be set, select one"`), which silently kills every data session. `DefaultConfig()` sets `LogOutput` to `os.Stderr`; setting it back to `nil` re-introduces the bug.
-- **CLI `scan`/`exec` commands dial the data port** (`controlPort+1`, derived via `cli.dataPortAddr`), not the control port — the control port expects a PAKE handshake, not yamux.
+- **CLI `exec` command dials the data port** (`controlPort+1`, derived via `cli.dataPortAddr`), not the control port — the control port expects a PAKE handshake, not yamux.
 - When adding a new transport, implement `StreamSession` and add selection logic in `getOrCreateDataSession`.
 - **New tunnel egress dials must use `comm.Dial(addr, timeout)`**, not `net.DialTimeout`, so the global `--socks5`/`--connect` flags apply (Tor/HTTP-proxy routing). QUIC (`transport_quic.go`) is the documented exception — it cannot traverse a TCP proxy.
 - The control loop uses a dedicated blocking receive goroutine + channel, NOT polling with read deadlines.

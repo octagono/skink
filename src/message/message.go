@@ -37,6 +37,13 @@ const (
 	TypeAccessGranted Type = "access-granted"
 	TypeAccessDenied  Type = "access-denied"
 
+	// Session resumption
+	TypeTunnelResume Type = "tunnel-resume"
+
+	// Relay HA sync
+	TypeTunnelSync       Type = "tunnel-sync"
+	TypeTunnelSyncRemove Type = "tunnel-sync-remove"
+
 	// Multi-hop relay path healing
 	TypeRelayAdvertise Type = "relay-advertise"
 	TypeRelayWithdraw  Type = "relay-withdraw"

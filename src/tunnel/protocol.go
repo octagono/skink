@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -24,14 +25,16 @@ const (
 	TunnelTypeSOCKS5 TunnelType = "socks5" // SOCKS5 proxy (forward proxy through relay)
 )
 
-// TunnelRegistration is sent by the client to register a new tunnel.
 type TunnelRegistration struct {
-	Subdomain string     `json:"subdomain"`
-	LocalAddr string     `json:"local_addr"`
-	Type      TunnelType `json:"type"`
-	Password  string     `json:"password,omitempty"`
-	Token     string     `json:"token,omitempty"`   // bearer token for auth (alternative to password)
-	Private   bool       `json:"private,omitempty"` // private mode: no public port, access by token only
+	Subdomain      string     `json:"subdomain"`
+	LocalAddr      string     `json:"local_addr"`
+	Type           TunnelType `json:"type"`
+	Password       string     `json:"password,omitempty"`
+	Token          string     `json:"token,omitempty"`
+	Private        bool       `json:"private,omitempty"`
+	MaxConns       int        `json:"max_conns,omitempty"`
+	BandwidthLimit int64      `json:"bandwidth_limit,omitempty"` // bytes/sec, 0=unlimited
+	IdleTimeout    int        `json:"idle_timeout,omitempty"`    // seconds, 0=default
 }
 
 // TunnelInfo is returned by the server on successful registration.
@@ -80,6 +83,18 @@ type TunnelErrorMessage struct {
 	Code    int    `json:"code"`
 }
 
+type TunnelResumeMessage struct {
+	TunnelID string `json:"tunnel_id"`
+	Token    string `json:"token"`
+}
+
+type TunnelSyncMessage struct {
+	Action    string           `json:"action"` // "register" or "unregister"
+	Tunnel    *PersistedTunnel `json:"tunnel,omitempty"`
+	TunnelID  string           `json:"tunnel_id,omitempty"`
+	RelayAddr string           `json:"relay_addr,omitempty"`
+}
+
 // AccessRequest is sent by an access client to request a private tunnel connection.
 type AccessRequest struct {
 	Token      string `json:"token"`
@@ -110,50 +125,76 @@ type ExecResponse struct {
 	Error    string `json:"error,omitempty"`
 }
 
-// RouteRule checks if a destination address matches a set of CIDR routes.
-type RouteRule struct {
-	routes    []*net.IPNet
-	bypass    []*net.IPNet
-	hasRoutes bool
+type domainPattern struct {
+	pattern  string // e.g. "*.example.com" or "exact.example.com"
+	wildcard bool
 }
 
-// NewRouteRule creates a RouteRule from CIDR strings.
-// routeCIDRs: traffic to these goes through tunnel
-// bypassCIDRs: traffic to these goes directly (never tunnel)
-func NewRouteRule(routeCIDRs, bypassCIDRs []string) (*RouteRule, error) {
+type RouteRule struct {
+	routes        []*net.IPNet
+	bypass        []*net.IPNet
+	domains       []domainPattern
+	bypassDomains []domainPattern
+	hasRoutes     bool
+}
+
+func newDomainPattern(s string) domainPattern {
+	if strings.HasPrefix(s, "*.") {
+		return domainPattern{pattern: s[1:], wildcard: true} // store as ".example.com"
+	}
+	return domainPattern{pattern: s, wildcard: false}
+}
+
+func matchDomain(host string, dp domainPattern) bool {
+	if dp.wildcard {
+		return strings.HasSuffix(host, dp.pattern)
+	}
+	return host == dp.pattern
+}
+
+func NewRouteRule(routeCandidates, bypassCandidates []string) (*RouteRule, error) {
 	r := &RouteRule{}
 
-	for _, cidr := range routeCIDRs {
-		cidr = strings.TrimSpace(cidr)
-		if cidr == "" {
+	for _, s := range routeCandidates {
+		s = strings.TrimSpace(s)
+		if s == "" {
 			continue
 		}
-		if !strings.Contains(cidr, "/") {
-			cidr += "/32"
-		}
-		_, net, err := net.ParseCIDR(cidr)
-		if err != nil {
-			return nil, fmt.Errorf("parse route %q: %w", cidr, err)
-		}
-		r.routes = append(r.routes, net)
-	}
-
-	for _, cidr := range bypassCIDRs {
-		cidr = strings.TrimSpace(cidr)
-		if cidr == "" {
+		if strings.HasPrefix(s, "*.") || (strings.Contains(s, ".") && !strings.Contains(s, "/")) {
+			r.domains = append(r.domains, newDomainPattern(s))
+			r.hasRoutes = true
 			continue
 		}
-		if !strings.Contains(cidr, "/") {
-			cidr += "/32"
+		if !strings.Contains(s, "/") {
+			s += "/32"
 		}
-		_, net, err := net.ParseCIDR(cidr)
+		_, parsed, err := net.ParseCIDR(s)
 		if err != nil {
-			return nil, fmt.Errorf("parse bypass %q: %w", cidr, err)
+			return nil, fmt.Errorf("parse route %q: %w", s, err)
 		}
-		r.bypass = append(r.bypass, net)
+		r.routes = append(r.routes, parsed)
+		r.hasRoutes = true
 	}
 
-	r.hasRoutes = len(r.routes) > 0
+	for _, s := range bypassCandidates {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if strings.HasPrefix(s, "*.") || (strings.Contains(s, ".") && !strings.Contains(s, "/")) {
+			r.bypassDomains = append(r.bypassDomains, newDomainPattern(s))
+			continue
+		}
+		if !strings.Contains(s, "/") {
+			s += "/32"
+		}
+		_, parsed, err := net.ParseCIDR(s)
+		if err != nil {
+			return nil, fmt.Errorf("parse bypass %q: %w", s, err)
+		}
+		r.bypass = append(r.bypass, parsed)
+	}
+
 	return r, nil
 }
 
@@ -171,18 +212,25 @@ func (r *RouteRule) Route(hostPort string) bool {
 
 	ip := net.ParseIP(host)
 	if ip == nil {
-		// Try DNS resolution for domain names
-		return r.hasRoutes // route domain names if routes are configured
+		for _, bd := range r.bypassDomains {
+			if matchDomain(host, bd) {
+				return false
+			}
+		}
+		for _, d := range r.domains {
+			if matchDomain(host, d) {
+				return true
+			}
+		}
+		return r.hasRoutes
 	}
 
-	// Check bypass first
 	for _, b := range r.bypass {
 		if b.Contains(ip) {
 			return false
 		}
 	}
 
-	// Check routes
 	for _, route := range r.routes {
 		if route.Contains(ip) {
 			return true
@@ -288,12 +336,14 @@ type Config struct {
 	// Increase to 64MB for high-throughput tunnels.
 	YamuxWindowSize int
 
-	// Private tunnel access mode (no public port — access by token)
 	Private     bool
 	AccessToken string
+	ConfigFile  string
+	ResumeFile  string
 
-	// ConfigFile path (loaded externally)
-	ConfigFile string
+	MaxConns       int
+	BandwidthLimit int64 // bytes/sec, 0=unlimited
+	IdleTimeout    int   // seconds, 0=default (30s)
 }
 
 // ConfigFile is a YAML-serializable configuration for the tunnel client.
@@ -325,7 +375,32 @@ const (
 	TunnelStateError
 )
 
-// SendTunnelMessage sends a typed tunnel message over a comm connection with optional encryption.
+var (
+	paddingMin int = 0
+	paddingMax int = 0
+)
+
+func SetPadding(min, max int) {
+	paddingMin = min
+	paddingMax = max
+}
+
+func randomPadding() []byte {
+	if paddingMax <= 0 || paddingMax < paddingMin {
+		return nil
+	}
+	size := paddingMin
+	if paddingMax > paddingMin {
+		size += int(time.Now().UnixNano() % int64(paddingMax-paddingMin+1))
+	}
+	if size <= 0 {
+		return nil
+	}
+	b := make([]byte, size)
+	rand.Read(b)
+	return b
+}
+
 func SendTunnelMessage(c *comm.Comm, key []byte, msgType message.Type, payload interface{}) error {
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -343,6 +418,12 @@ func SendTunnelMessage(c *comm.Comm, key []byte, msgType message.Type, payload i
 	}
 
 	encoded = compress.Compress(encoded)
+
+	pad := randomPadding()
+	if pad != nil {
+		encoded = append(encoded, pad...)
+	}
+
 	if key != nil {
 		encoded, err = crypt.Encrypt(encoded, key)
 		if err != nil {
@@ -350,12 +431,15 @@ func SendTunnelMessage(c *comm.Comm, key []byte, msgType message.Type, payload i
 		}
 	}
 
-	log.Debugf("sending tunnel message type=%s len=%d", msgType, len(encoded))
+	if key == nil && pad != nil {
+		padLen := []byte{byte(len(pad))}
+		encoded = append(padLen, encoded...)
+	}
+
+	log.Debugf("sending tunnel message type=%s len=%d pad=%d", msgType, len(encoded), len(pad))
 	return c.Send(encoded)
 }
 
-// ReceiveTunnelMessage receives a tunnel message, optionally decrypting it.
-// Returns the message type and raw payload bytes.
 func ReceiveTunnelMessage(c *comm.Comm, key []byte) (message.Type, []byte, error) {
 	data, err := c.Receive()
 	if err != nil {
@@ -366,6 +450,13 @@ func ReceiveTunnelMessage(c *comm.Comm, key []byte) (message.Type, []byte, error
 		data, err = crypt.Decrypt(data, key)
 		if err != nil {
 			return "", nil, fmt.Errorf("decrypt: %w", err)
+		}
+	}
+
+	if key == nil && len(data) > 0 {
+		padLen := int(data[0])
+		if padLen > 0 && padLen < len(data) {
+			data = data[1 : len(data)-padLen]
 		}
 	}
 

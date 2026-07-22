@@ -137,6 +137,9 @@ func Run() (err error) {
 				&cli.IntFlag{Name: "yamux-window", Value: 0, Usage: "yamux stream window size in bytes (0=default 16MB)", EnvVars: []string{"SKINK_YAMUX_WINDOW"}},
 				&cli.IntFlag{Name: "api-port", Value: 0, Usage: "port for REST API server (0=disabled, binds 127.0.0.1)", EnvVars: []string{"SKINK_API_PORT"}},
 				&cli.StringFlag{Name: "api-token", Value: "", Usage: "bearer token for REST API authentication (empty=no auth)", EnvVars: []string{"SKINK_API_TOKEN"}},
+				&cli.StringFlag{Name: "persist", Value: "", Usage: "path to persist tunnel state (tunnels survive relay restart)", EnvVars: []string{"SKINK_PERSIST"}},
+				&cli.IntFlag{Name: "sync-port", Value: 0, Usage: "port for HA state sync between relays (0=disabled)", EnvVars: []string{"SKINK_SYNC_PORT"}},
+				&cli.StringFlag{Name: "sync-peers", Value: "", Usage: "comma-separated relay sync peers (host:port)", EnvVars: []string{"SKINK_SYNC_PEERS"}},
 			},
 		},
 		{
@@ -166,6 +169,13 @@ func Run() (err error) {
 				&cli.StringFlag{Name: "route", Value: "", Usage: "comma-separated CIDRs to route through tunnel (split tunnel)", EnvVars: []string{"SKINK_TUNNEL_ROUTE"}},
 				&cli.StringFlag{Name: "bypass", Value: "", Usage: "comma-separated CIDRs to bypass tunnel (direct connect)", EnvVars: []string{"SKINK_TUNNEL_BYPASS"}},
 				&cli.IntFlag{Name: "yamux-window", Value: 0, Usage: "yamux stream window size in bytes (0=default 16MB)", EnvVars: []string{"SKINK_YAMUX_WINDOW"}},
+				&cli.StringFlag{Name: "resume", Value: "", Usage: "path to resume state file (reconnect with saved tunnel ID)", EnvVars: []string{"SKINK_RESUME"}},
+				&cli.IntFlag{Name: "max-connections", Value: 0, Usage: "max concurrent proxy connections per tunnel (0=unlimited)", EnvVars: []string{"SKINK_MAX_CONNECTIONS"}},
+				&cli.Int64Flag{Name: "bandwidth-limit", Value: 0, Usage: "bandwidth limit in bytes/sec per tunnel (0=unlimited)", EnvVars: []string{"SKINK_BANDWIDTH_LIMIT"}},
+				&cli.IntFlag{Name: "idle-timeout", Value: 0, Usage: "proxy connection idle timeout in seconds (0=default 30s)", EnvVars: []string{"SKINK_IDLE_TIMEOUT"}},
+				&cli.BoolFlag{Name: "integrity", Usage: "enable per-message integrity verification (HMAC-SHA256)", EnvVars: []string{"SKINK_INTEGRITY"}},
+				&cli.IntFlag{Name: "padding-min", Value: 0, Usage: "minimum random padding bytes per message (0=disabled)", EnvVars: []string{"SKINK_PADDING_MIN"}},
+				&cli.IntFlag{Name: "padding-max", Value: 0, Usage: "maximum random padding bytes per message (0=disabled)", EnvVars: []string{"SKINK_PADDING_MAX"}},
 			},
 		},
 		{
@@ -1002,8 +1012,29 @@ func relay(c *cli.Context) (err error) {
 		// tunnel.NewServer(host, port, password, relayDomain, httpPort, tcpPortBase)
 		srv := tunnel.NewServer("", tunnelPort, tunPass, tunnelDomain, tunnelHTTPPort, 10000)
 
+		if persistPath := c.String("persist"); persistPath != "" {
+			srv.SetStore(tunnel.NewTunnelStore(persistPath))
+		}
+
+		var syncPeers []string
+		if peersStr := c.String("sync-peers"); peersStr != "" {
+			for _, p := range strings.Split(peersStr, ",") {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					syncPeers = append(syncPeers, p)
+				}
+			}
+		}
+		if syncPort := c.Int("sync-port"); syncPort > 0 || len(syncPeers) > 0 {
+			srv.SetSync(syncPeers, c.Int("sync-port"))
+		}
+
 		if ws := c.Int("yamux-window"); ws > 0 {
 			srv.SetYamuxWindowSize(ws)
+		}
+
+		if pmax := c.Int("padding-max"); pmax > 0 {
+			tunnel.SetPadding(c.Int("padding-min"), pmax)
 		}
 
 		// Configure named pipe if specified (Windows SMB lateral movement)
@@ -1253,14 +1284,18 @@ func tunnelCmd(c *cli.Context) error {
 	}
 
 	config := tunnel.Config{
-		ServerAddr: serverAddr,
-		LocalAddr:  localAddr,
-		Subdomain:  subdomain,
-		Password:   password,
-		Token:      token,
-		ServerPass: serverPass,
-		TunnelType: tt,
-		Private:    isPrivate,
+		ServerAddr:     serverAddr,
+		LocalAddr:      localAddr,
+		Subdomain:      subdomain,
+		Password:       password,
+		Token:          token,
+		ServerPass:     serverPass,
+		TunnelType:     tt,
+		Private:        isPrivate,
+		ResumeFile:     c.String("resume"),
+		MaxConns:       c.Int("max-connections"),
+		BandwidthLimit: c.Int64("bandwidth-limit"),
+		IdleTimeout:    c.Int("idle-timeout"),
 	}
 
 	// Load config file if specified
@@ -1307,6 +1342,10 @@ func tunnelCmd(c *cli.Context) error {
 
 	if ws := c.Int("yamux-window"); ws > 0 {
 		config.YamuxWindowSize = ws
+	}
+
+	if pmax := c.Int("padding-max"); pmax > 0 {
+		tunnel.SetPadding(c.Int("padding-min"), pmax)
 	}
 
 	// For SOCKS5 tunnels, local addr is the SOCKS5 listen address
