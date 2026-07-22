@@ -69,6 +69,14 @@ skink exec --server relay:9090 -- ls -la /etc         # remote exec on relay
 skink noise-keygen                           # generate Noise keypair
 ```
 
+## Why Skink?
+
+Most tunnel tools make you choose: simple or secure, fast or configurable, CLI-friendly or feature-rich. Skink doesn't.
+
+It gives you **ngrok-style reverse tunnels** with PFS rekeying, per-tunnel ACLs, tamper-evident audit logging, and HA clustering — all in a **single static Go binary** with zero runtime dependencies. File transfer, SOCKS5 proxy, remote exec, and MCP AI-agent integration ship in the same binary.
+
+Whether you're exposing a dev server through NAT, routing a red team C2 through three chained relays, or scripting file transfers in CI: one binary, one syntax, one encrypted channel.
+
 ## Features
 
 ### File transfer
@@ -96,7 +104,9 @@ skink noise-keygen                           # generate Noise keypair
 | QUIC | `--transport quic` | HTTP/3 transport — native multiplexing (no head-of-line blocking), 1-RTT TLS 1.3 |
 | Named pipe | `--transport pipe` | Windows SMB named pipe transport for lateral movement |
 
-### Multi-hop relay chaining
+### Advanced Tunnel Features
+
+#### Multi-hop relay chaining
 
 Chain relays for opsec: **Target → Relay-C → Relay-B → Relay-A → You**
 
@@ -108,7 +118,7 @@ skink tunnel --server pivot:9091 --type socks5       # target
 
 Each relay only knows the next hop. The upstream allocates ports and handles connections.
 
-### Private tunnel sharing
+#### Private tunnel sharing
 
 Expose a service through the relay **without a public port**. Access is granted by token — no URL to scan, no port to probe.
 
@@ -129,7 +139,7 @@ skink tunnel --server relay:9090 --access a1b2c3d4... --local localhost:2222
 - Works with all tunnel types (TCP, HTTP, UDP)
 - Bridge uses existing yamux multiplexing through the relay data port
 
-### Session resumption & persistence
+#### Session resumption & persistence
 
 Tunnels survive relay restarts. The relay persists state to a JSON file; clients
 reconnect with their saved tunnel ID instead of re-registering.
@@ -147,7 +157,7 @@ saved tunnel ID. The relay looks up the persisted state and resumes without
 requiring re-registration. If resume fails (relay has no such tunnel), the client
 falls back to a fresh registration automatically.
 
-### Relay HA clustering
+#### Relay HA clustering
 
 Run multiple relays that share tunnel state. When a tunnel registers or
 unregisters on one relay, it syncs to all peers.
@@ -167,7 +177,7 @@ skink tunnel --server relayA:9090,relayB:9091 --resume /tmp/resume.json --type t
 The client tries each server in order. With shared state and `--resume`, the
 tunnel reconnects to whichever relay is available.
 
-### Per-tunnel resource controls
+#### Per-tunnel resource controls
 
 Set connection limits, bandwidth caps, and idle timeouts per tunnel:
 
@@ -181,7 +191,7 @@ Limits are sent in the tunnel registration and enforced by the relay:
 - `--bandwidth-limit`: bytes/sec per tunnel (0=unlimited)
 - `--idle-timeout`: proxy connection idle timeout in seconds (0=default 30s)
 
-### Dynamic split tunneling
+#### Dynamic split tunneling
 
 Route traffic through the tunnel or bypass it using domain names or CIDRs.
 Supports wildcard domains, exact domains, and CIDR notation in the same rules:
@@ -197,7 +207,7 @@ Domain patterns (`*.example.com`) are checked before DNS resolution. If the
 destination domain matches a route or bypass pattern, the decision is made
 immediately without resolving.
 
-### Traffic obfuscation
+#### Traffic obfuscation
 
 Random padding per message makes traffic analysis harder. Combine with
 heartbeat jitter for stealth:
@@ -211,7 +221,7 @@ Padding is applied to every tunnel control message. The relay strips padding
 before processing. Timing jitter on heartbeats (±40% with --heartbeat-jitter 0.4)
 makes beaconing detection difficult.
 
-### Message integrity verification
+#### Message integrity verification
 
 Optional HMAC-SHA256 per tunnel message detects tampering:
 
@@ -222,7 +232,7 @@ skink tunnel --server relay:9090 --type tcp --local :22 --integrity
 Adds an HMAC tag to every control message. The relay verifies each message
 before processing. Integrity key is derived from the PAKE session key.
 
-### PFS rekeying
+#### PFS rekeying
 
 Periodic key rotation for long-lived tunnels using ECDH P-256 over the
 encrypted control channel:
@@ -235,7 +245,7 @@ Fresh ECDH keypair generated each interval. Shared secret derived via
 ECDH, new session key = SHA256(old_key || shared_secret). Both sides
 switch atomically. No connection drop.
 
-### Connection migration
+#### Connection migration
 
 Move a live tunnel to another relay without restarting:
 
@@ -246,7 +256,7 @@ skink tunnel --server relay-a:9090 --type tcp --local :22 --migrate relay-b:9090
 Establishes new control connection + resume to target relay, closes old
 connection, re-establishes data session on target's data port.
 
-### Per-tunnel ACLs
+#### Per-tunnel ACLs
 
 Fine-grained access control inside tunnels:
 
@@ -259,7 +269,7 @@ skink tunnel --server relay:9090 --type socks5 \
 Supports IP, CIDR, and domain patterns. Checked on every proxy connection
 in `RequestProxy` before forwarding.
 
-### Built-in compression
+#### Built-in compression
 
 Configurable compression per tunnel with auto-negotiation:
 
@@ -270,7 +280,7 @@ skink tunnel --server relay:9090 --type http --local :3000 --compress gzip
 Options: `deflate` (default), `gzip`, `none`. Applied to all tunnel control
 messages and data streams.
 
-### Tamper-evident audit logging
+#### Tamper-evident audit logging
 
 Append-only signed audit log on the relay for tunnel events:
 
@@ -281,7 +291,7 @@ skink relay --tunnel-port 9090 --audit-log /var/log/skink-audit.json
 Every tunnel registration, disconnection, and proxy event is written as a
 JSON line with HMAC-SHA256 chain hash. Tampering breaks the hash chain.
 
-### Domain regex routing
+#### Domain regex routing
 
 Extend split tunneling with regex domain patterns:
 
@@ -294,7 +304,7 @@ skink tunnel --server relay:9090 --type socks5 \
 Prefix patterns with `re:` for regex matching. Works alongside CIDR and
 wildcard domain patterns in `--route`/`--bypass`.
 
-### STUN / NAT traversal
+#### STUN / NAT traversal
 
 Discover your public address via STUN for UDP hole punching:
 
@@ -305,7 +315,7 @@ skink tunnel --server relay:9090 --stun-server stun.l.google.com:19302
 Prints the public IP:port discovered via STUN binding request. Useful for
 debugging NAT traversal with UDP tunnels.
 
-### Embedded lite relay
+#### Embedded lite relay
 
 Spawn a minimal in-process relay for direct P2P fallback:
 
@@ -316,7 +326,7 @@ skink tunnel --server main-relay:9090 --embedded-relay 9999
 When the main relay is unreachable, the embedded relay accepts tunnel
 connections directly on port 9999 with PAKE authentication.
 
-### Adaptive window tuning
+#### Adaptive window tuning
 
 Auto-tune yamux stream window based on measured RTT:
 
@@ -328,7 +338,7 @@ Sends RTT probe messages every 5 seconds. Smoothed RTT adjusts the
 yamux window to match Bandwidth-Delay Product (BDP) for optimal
 throughput on high-latency links.
 
-### Configurable DNS in SOCKS5
+#### Configurable DNS in SOCKS5
 
 Control where DNS resolution happens in SOCKS5 proxy mode:
 
@@ -339,7 +349,7 @@ skink tunnel --server relay:9090 --type socks5 --dns remote
 Modes: `remote` (default — relay resolves), `local` (client resolves
 before forwarding), `both` (try local, fallback to remote).
 
-### Encrypted state files
+#### Encrypted state files
 
 State files persisted via `--persist` are encrypted at rest with AES-256-GCM:
 
@@ -350,7 +360,7 @@ skink relay --tunnel-port 9090 --persist /var/lib/skink/state.json --state-key "
 Key defaults to SHA-256 of relay password. Use `--state-key` for a
 dedicated key. Use `--persist :memory:` for in-memory only (no disk).
 
-### REST API
+#### REST API
 
 Manage tunnels programmatically via a local HTTP API on the relay.
 
