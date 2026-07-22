@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"context"
+	"crypto/ecdh"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/json"
@@ -117,10 +118,9 @@ type Client struct {
 	// Connection pool for HTTP tunnel mode (reuses local service connections)
 	localPool *localConnPool
 
-	// For reconnection
 	reconnectAttempt int
-
-	socks5Started bool // prevents re-starting SOCKS5 on reconnect
+	pendingRekeyKey  *ecdh.PrivateKey
+	socks5Started    bool
 
 	stopOnce sync.Once
 	quit     chan struct{}
@@ -653,6 +653,8 @@ func (c *Client) tryConnect(serverAddr string) error {
 		MaxConns:       c.config.MaxConns,
 		BandwidthLimit: c.config.BandwidthLimit,
 		IdleTimeout:    c.config.IdleTimeout,
+		ACLAllow:       c.config.ACLAllow,
+		ACLDeny:        c.config.ACLDeny,
 	}
 	if err := SendTunnelMessage(c.controlConn, c.controlKey, message.TypeTunnelRegister, reg); err != nil {
 		c.controlConn.Close()
@@ -748,6 +750,8 @@ func (c *Client) connectWS(addr string) error {
 		MaxConns:       c.config.MaxConns,
 		BandwidthLimit: c.config.BandwidthLimit,
 		IdleTimeout:    c.config.IdleTimeout,
+		ACLAllow:       c.config.ACLAllow,
+		ACLDeny:        c.config.ACLDeny,
 	}
 
 	if err := SendTunnelMessage(c.controlConn, c.controlKey, message.TypeTunnelRegister, reg); err != nil {
@@ -837,6 +841,8 @@ func (c *Client) connectPipe() error {
 		MaxConns:       c.config.MaxConns,
 		BandwidthLimit: c.config.BandwidthLimit,
 		IdleTimeout:    c.config.IdleTimeout,
+		ACLAllow:       c.config.ACLAllow,
+		ACLDeny:        c.config.ACLDeny,
 	}
 
 	if err := SendTunnelMessage(c.controlConn, c.controlKey, message.TypeTunnelRegister, reg); err != nil {
@@ -886,9 +892,7 @@ func (c *Client) connectPipe() error {
 	return nil
 }
 
-// controlLoop handles messages on the control connection.
 func (c *Client) controlLoop() error {
-	// Use configurable heartbeat interval with jitter
 	hbCfg := c.config.Heartbeat
 	if hbCfg.Interval <= 0 {
 		hbCfg = DefaultHeartbeatConfig()
@@ -897,20 +901,31 @@ func (c *Client) controlLoop() error {
 	heartbeatTicker := time.NewTicker(hbCfg.NextInterval())
 	defer heartbeatTicker.Stop()
 
+	var rekeyTicker *time.Ticker
+	var rekeyCh <-chan time.Time
+	if c.config.RekeyInterval > 0 {
+		rekeyTicker = time.NewTicker(time.Duration(c.config.RekeyInterval) * time.Second)
+		rekeyCh = rekeyTicker.C
+		defer rekeyTicker.Stop()
+	}
+
 	for {
 		select {
 		case <-c.quit:
 			return nil
 		case <-heartbeatTicker.C:
-			// Send heartbeat
 			if err := SendTunnelMessage(c.controlConn, c.controlKey, message.TypeHeartbeat, HeartbeatMessage{
 				Timestamp: time.Now().Unix(),
 			}); err != nil {
 				return fmt.Errorf("heartbeat: %w", err)
 			}
-			// Reset ticker with new interval (jitter varies each time)
 			heartbeatTicker.Stop()
 			heartbeatTicker = time.NewTicker(hbCfg.NextInterval())
+
+		case <-rekeyCh:
+			if err := c.initiateRekey(); err != nil {
+				log.Debugf("rekey failed: %v", err)
+			}
 
 		default:
 			// Try to receive a message with a deadline
@@ -938,11 +953,45 @@ func (c *Client) controlLoop() error {
 }
 
 // handleMessage processes a single tunnel control message.
+func (c *Client) initiateRekey() error {
+	priv, err := generateECDHKey()
+	if err != nil {
+		return err
+	}
+	c.pendingRekeyKey = priv
+	rm := RekeyMessage{PublicKey: priv.PublicKey().Bytes()}
+	if err := SendTunnelMessage(c.controlConn, c.controlKey, message.TypeRekey, rm); err != nil {
+		c.pendingRekeyKey = nil
+		return fmt.Errorf("send rekey: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) handleRekeyAck(payload []byte) error {
+	var rm RekeyMessage
+	if err := DecodePayload(payload, &rm); err != nil {
+		return fmt.Errorf("decode rekey ack: %w", err)
+	}
+	if c.pendingRekeyKey == nil {
+		return fmt.Errorf("rekey ack without pending key")
+	}
+	newKey, err := deriveRekeyKey(c.pendingRekeyKey, c.controlKey, rm.PublicKey)
+	c.pendingRekeyKey = nil
+	if err != nil {
+		return fmt.Errorf("derive rekey key: %w", err)
+	}
+	c.controlKey = newKey
+	log.Debugf("tunnel rekeyed")
+	return nil
+}
+
 func (c *Client) handleMessage(msgType message.Type, payload []byte) error {
 	switch msgType {
 	case message.TypeHeartbeat:
-		// Server heartbeat response — just a keep-alive
 		return nil
+
+	case message.TypeRekeyAck:
+		return c.handleRekeyAck(payload)
 
 	case message.TypeReqProxy:
 		var req ReqProxyMessage
@@ -1352,8 +1401,42 @@ func wrapTLS(conn net.Conn, serverAddr string, cfg TLSConfig) (net.Conn, error) 
 }
 
 // StartAccess runs the client in private tunnel access mode.
-// It connects to the relay data port, establishes a yamux session,
-// and opens ACCESS| streams for each incoming local connection.
+func (c *Client) Migrate(targetAddr, targetPass string) error {
+	oldConn := c.controlConn
+	oldKey := c.controlKey
+	savedAddr := c.config.ServerAddr
+	savedPass := c.config.ServerPass
+
+	c.config.ServerAddr = targetAddr
+	c.config.ServerPass = targetPass
+	c.controlConn = nil
+	c.controlKey = nil
+
+	err := c.connect()
+	if err != nil {
+		c.config.ServerAddr = savedAddr
+		c.config.ServerPass = savedPass
+		c.controlConn = oldConn
+		c.controlKey = oldKey
+		return fmt.Errorf("migrate connect: %w", err)
+	}
+
+	if oldConn != nil {
+		log.Infof("migrated tunnel %s → %s", savedAddr, targetAddr)
+		oldConn.Close()
+	}
+
+	if c.dataSession != nil {
+		c.dataSession.Close()
+		c.dataSession = nil
+	}
+	_, err = c.getOrCreateDataSession()
+	if err != nil {
+		log.Warnf("migrate: new data session: %v", err)
+	}
+	return nil
+}
+
 func (c *Client) StartAccess() error {
 	serverAddr := c.config.ServerAddr
 

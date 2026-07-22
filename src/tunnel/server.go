@@ -907,6 +907,8 @@ func (s *Server) handleTunnelRegister(c *comm.Comm, key []byte, payload []byte, 
 		CreatedAt:   time.Now(),
 		LastSeen:    time.Now(),
 		MaxConns:    reg.MaxConns,
+		ACLAllow:    reg.ACLAllow,
+		ACLDeny:     reg.ACLDeny,
 	}
 
 	if reg.BandwidthLimit > 0 || reg.IdleTimeout > 0 {
@@ -1146,6 +1148,26 @@ func (s *Server) controlLoop(c *comm.Comm, key []byte, entry *TunnelEntry) {
 				// The connection itself arrives via the data port handler,
 				// so this is just a confirmation — no action needed.
 
+			case message.TypeRekey:
+				var rm RekeyMessage
+				if err := DecodePayload(result.payload, &rm); err != nil {
+					log.Debugf("decode rekey failed: %v", err)
+					continue
+				}
+				newKey, serverPub, err := doRekeyServerSide(key, rm.PublicKey)
+				if err != nil {
+					log.Debugf("rekey failed: %v", err)
+					continue
+				}
+				ack := RekeyMessage{PublicKey: serverPub}
+				if err := SendTunnelMessage(c, key, message.TypeRekeyAck, ack); err != nil {
+					log.Debugf("send rekey ack failed: %v", err)
+					continue
+				}
+				key = newKey
+				entry.ControlKey = newKey
+				log.Debugf("tunnel rekeyed")
+
 			case message.TypeTunnelClose:
 				var tc TunnelCloseMessage
 				if err := DecodePayload(result.payload, &tc); err == nil {
@@ -1180,13 +1202,66 @@ func (s *Server) controlLoop(c *comm.Comm, key []byte, entry *TunnelEntry) {
 // RequestProxy sends a ReqProxy to the tunnel client and waits for a proxy connection
 // to arrive on the same listener. Returns the proxy connection that the HTTP handler can use.
 // Enforces per-tunnel concurrency limit if MaxConns > 0.
+func matchACL(addr string, allowList, denyList []string) bool {
+	if len(allowList) == 0 && len(denyList) == 0 {
+		return true
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	ip := net.ParseIP(host)
+
+	// Check deny first
+	for _, d := range denyList {
+		if strings.Contains(d, "/") && ip != nil {
+			_, cidr, _ := net.ParseCIDR(d)
+			if cidr != nil && cidr.Contains(ip) {
+				return false
+			}
+		} else if strings.Contains(d, "*.") && ip == nil {
+			if strings.HasSuffix(host, d[1:]) {
+				return false
+			}
+		} else if ip == nil && host == d {
+			return false
+		} else if ip != nil && ip.String() == d {
+			return false
+		}
+	}
+
+	if len(allowList) == 0 {
+		return true
+	}
+	for _, a := range allowList {
+		if strings.Contains(a, "/") && ip != nil {
+			_, cidr, _ := net.ParseCIDR(a)
+			if cidr != nil && cidr.Contains(ip) {
+				return true
+			}
+		} else if strings.Contains(a, "*.") && ip == nil {
+			if strings.HasSuffix(host, a[1:]) {
+				return true
+			}
+		} else if ip == nil && host == a {
+			return true
+		} else if ip != nil && ip.String() == a {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) RequestProxy(tunnelID string, clientAddr string) (net.Conn, error) {
 	entry := s.registry.LookupByID(tunnelID)
 	if entry == nil {
 		return nil, fmt.Errorf("tunnel %s not found", tunnelID)
 	}
 
-	// Enforce concurrency cap
+	if !matchACL(clientAddr, entry.ACLAllow, entry.ACLDeny) {
+		return nil, fmt.Errorf("acl: %s denied", clientAddr)
+	}
+
 	if !entry.AcquireConn() {
 		return nil, fmt.Errorf("tunnel %s at max concurrent connections (%d)", entry.Subdomain, entry.MaxConns)
 	}

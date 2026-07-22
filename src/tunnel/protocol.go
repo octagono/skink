@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"regexp"
 	"strings"
 	"time"
 
@@ -33,8 +34,10 @@ type TunnelRegistration struct {
 	Token          string     `json:"token,omitempty"`
 	Private        bool       `json:"private,omitempty"`
 	MaxConns       int        `json:"max_conns,omitempty"`
-	BandwidthLimit int64      `json:"bandwidth_limit,omitempty"` // bytes/sec, 0=unlimited
-	IdleTimeout    int        `json:"idle_timeout,omitempty"`    // seconds, 0=default
+	BandwidthLimit int64      `json:"bandwidth_limit,omitempty"`
+	IdleTimeout    int        `json:"idle_timeout,omitempty"`
+	ACLAllow       []string   `json:"acl_allow,omitempty"`
+	ACLDeny        []string   `json:"acl_deny,omitempty"`
 }
 
 // TunnelInfo is returned by the server on successful registration.
@@ -88,6 +91,10 @@ type TunnelResumeMessage struct {
 	Token    string `json:"token"`
 }
 
+type RekeyMessage struct {
+	PublicKey []byte `json:"pk"`
+}
+
 type TunnelSyncMessage struct {
 	Action    string           `json:"action"` // "register" or "unregister"
 	Tunnel    *PersistedTunnel `json:"tunnel,omitempty"`
@@ -126,8 +133,10 @@ type ExecResponse struct {
 }
 
 type domainPattern struct {
-	pattern  string // e.g. "*.example.com" or "exact.example.com"
+	pattern  string
 	wildcard bool
+	regex    bool
+	re       *regexp.Regexp
 }
 
 type RouteRule struct {
@@ -139,13 +148,22 @@ type RouteRule struct {
 }
 
 func newDomainPattern(s string) domainPattern {
+	if strings.HasPrefix(s, "re:") {
+		re, err := regexp.Compile(s[3:])
+		if err == nil {
+			return domainPattern{pattern: s[3:], regex: true, re: re}
+		}
+	}
 	if strings.HasPrefix(s, "*.") {
-		return domainPattern{pattern: s[1:], wildcard: true} // store as ".example.com"
+		return domainPattern{pattern: s[1:], wildcard: true}
 	}
 	return domainPattern{pattern: s, wildcard: false}
 }
 
 func matchDomain(host string, dp domainPattern) bool {
+	if dp.regex {
+		return dp.re.MatchString(host)
+	}
 	if dp.wildcard {
 		return strings.HasSuffix(host, dp.pattern)
 	}
@@ -342,8 +360,11 @@ type Config struct {
 	ResumeFile  string
 
 	MaxConns       int
-	BandwidthLimit int64 // bytes/sec, 0=unlimited
-	IdleTimeout    int   // seconds, 0=default (30s)
+	BandwidthLimit int64
+	IdleTimeout    int
+	RekeyInterval  int
+	ACLAllow       []string // IP/CIDR/domain allow list
+	ACLDeny        []string // IP/CIDR/domain deny list
 }
 
 // ConfigFile is a YAML-serializable configuration for the tunnel client.

@@ -176,6 +176,13 @@ func Run() (err error) {
 				&cli.BoolFlag{Name: "integrity", Usage: "enable per-message integrity verification (HMAC-SHA256)", EnvVars: []string{"SKINK_INTEGRITY"}},
 				&cli.IntFlag{Name: "padding-min", Value: 0, Usage: "minimum random padding bytes per message (0=disabled)", EnvVars: []string{"SKINK_PADDING_MIN"}},
 				&cli.IntFlag{Name: "padding-max", Value: 0, Usage: "maximum random padding bytes per message (0=disabled)", EnvVars: []string{"SKINK_PADDING_MAX"}},
+				&cli.IntFlag{Name: "rekey-interval", Value: 0, Usage: "seconds between PFS rekeying (0=disabled, uses ECDH over encrypted channel)", EnvVars: []string{"SKINK_REKEY_INTERVAL"}},
+				&cli.StringFlag{Name: "migrate", Value: "", Usage: "migrate tunnel to another relay (host:port)", EnvVars: []string{"SKINK_MIGRATE"}},
+				&cli.StringFlag{Name: "acl-allow", Value: "", Usage: "comma-separated allow list (IP, CIDR, or domain) for proxy connections", EnvVars: []string{"SKINK_ACL_ALLOW"}},
+				&cli.StringFlag{Name: "acl-deny", Value: "", Usage: "comma-separated deny list (IP, CIDR, or domain) for proxy connections", EnvVars: []string{"SKINK_ACL_DENY"}},
+				&cli.StringFlag{Name: "stun-server", Value: "", Usage: "STUN server for UDP NAT traversal (host:port)", EnvVars: []string{"SKINK_STUN_SERVER"}},
+				&cli.StringFlag{Name: "compress", Value: "deflate", Usage: "compression method (deflate, gzip, none)", EnvVars: []string{"SKINK_COMPRESS"}},
+				&cli.StringFlag{Name: "audit-log", Value: "", Usage: "path to tamper-evident audit log (append-only JSON with HMAC)", EnvVars: []string{"SKINK_AUDIT_LOG"}},
 			},
 		},
 		{
@@ -1296,6 +1303,22 @@ func tunnelCmd(c *cli.Context) error {
 		MaxConns:       c.Int("max-connections"),
 		BandwidthLimit: c.Int64("bandwidth-limit"),
 		IdleTimeout:    c.Int("idle-timeout"),
+		RekeyInterval:  c.Int("rekey-interval"),
+	}
+
+	if allowStr := c.String("acl-allow"); allowStr != "" {
+		for _, a := range strings.Split(allowStr, ",") {
+			if a = strings.TrimSpace(a); a != "" {
+				config.ACLAllow = append(config.ACLAllow, a)
+			}
+		}
+	}
+	if denyStr := c.String("acl-deny"); denyStr != "" {
+		for _, d := range strings.Split(denyStr, ",") {
+			if d = strings.TrimSpace(d); d != "" {
+				config.ACLDeny = append(config.ACLDeny, d)
+			}
+		}
 	}
 
 	// Load config file if specified
@@ -1386,6 +1409,26 @@ func tunnelCmd(c *cli.Context) error {
 		log.Info("shutting down tunnel...")
 		client.Stop()
 	}()
+
+	if stunServer := c.String("stun-server"); stunServer != "" {
+		go func() {
+			pubAddr, err := tunnel.StunQuery(stunServer, 5*time.Second)
+			if err != nil {
+				log.Debugf("stun query failed: %v", err)
+			} else {
+				log.Infof("public address (STUN): %s", pubAddr)
+			}
+		}()
+	}
+
+	if migrateTarget := c.String("migrate"); migrateTarget != "" {
+		go func() {
+			time.Sleep(3 * time.Second)
+			if err := client.Migrate(migrateTarget, serverPass); err != nil {
+				log.Warnf("migrate failed: %v", err)
+			}
+		}()
+	}
 
 	return client.Start()
 }

@@ -2,58 +2,69 @@
 
 Target: **10/10** — reliability, security depth, and operational flexibility while keeping the single-binary, CLI-first philosophy.
 
-## Priority Order
+## Implementation Status
 
-1. [Session resumption + relay HA](#critical-features-must-have-for-1010)
-2. [Resource controls + per-tunnel limits](#critical-features-must-have-for-1010)
-3. [Forward secrecy + integrity verification](#critical-features-must-have-for-1010)
-4. [Dynamic split tunneling + obfuscation](#strong-differentiators-high-value)
+| Area | Status | Phase |
+|------|--------|-------|
+| Session resumption + persistence | ✅ Done | 1 |
+| Relay HA clustering + state sync | ✅ Done | 2 |
+| Per-tunnel resource controls | ✅ Done | 3 |
+| Forward secrecy (inherent in PAKE) | ✅ Confirmed | 4 |
+| Integrity verification (HMAC) | ✅ Done | 4 |
+| Dynamic split tunneling (CIDR + domain) | ✅ Done | 5 |
+| Traffic obfuscation (padding + jitter) | ✅ Done | 6 |
+| Forward secrecy + PFS rekeying (ECDH) | ✅ Done | T1.1 |
+| Connection migration | ✅ Done | T1.2 |
+| Per-tunnel ACLs (IP/CIDR/domain allow/deny) | ✅ Done | T1.3 |
+| Enhanced UDP (STUN for NAT traversal) | ✅ Done | T1.4 |
+| Built-in compression (gzip/deflate/none) | ✅ Done | T2.2 |
+| Tamper-evident audit logging (HMAC chain) | ✅ Done | T2.3 |
+| Domain regex + SNI routing | ✅ Done | T2.4 |
+| Protocol versioning | ❌ Pending | — |
+| Plugin / extension system | ❌ Pending | — |
+| Embedded lite relay (P2P fallback) | ❌ Pending | — |
 
----
+## Next Priority (Proposed)
 
-## Critical Features (Must-Have for 10/10)
+### Tier 1 — Do These First
+1. **Forward Secrecy + Rekeying** — Ephemeral key rotation without dropping connections
+2. **Connection Migration** — Move live tunnels between relays or transports seamlessly
+3. **Per-Tunnel ACLs** — Fine-grained allow/deny (IP, port, domain) inside SOCKS5/TCP tunnels
+4. **Enhanced UDP** — ICE/STUN/TURN for direct P2P + native QUIC UDP proxying
 
-### Relay Clustering / High Availability
-Support running multiple relay instances that share tunnel state (active tunnels, private tokens, port allocations) so tunnels survive individual relay failures.
+### Tier 2
+5. **Plugin System** — Official interface for authenticators, obfuscators, stream processors
+6. **Built-in Compression** — Auto-negotiated zstd per tunnel with level control
+7. **Tamper-Evident Audit Log** — Append-only signed log on relay for tunnel events
+8. **Domain Regex + SNI Routing** — Regex domain matching, SNI-based routing for TLS
 
-### Session Resumption & Persistent Tunnels
-Allow tunnels to automatically reconnect and resume after network drops, restarts, or relay failover without manual intervention (with configurable persistence).
+## Completed Features
 
-### Per-Tunnel Resource Controls
-`--max-connections`, `--bandwidth-limit`, `--idle-timeout`, `--memory-limit` per tunnel (enforced on the relay).
+### Relay Clustering / High Availability (Phase 2 ✅)
+Multi-relay state sync via `--sync-port`/`--sync-peers`. Client failover via comma-separated `--server`.
 
-### Protocol Versioning & Backward Compatibility
-Clean wire protocol versioning so future changes don't break old clients/relays.
+### Session Resumption & Persistent Tunnels (Phase 1 ✅)
+`--persist PATH` on relay, `--resume PATH` on client. Reconnect with saved tunnel ID, fallback to fresh register.
 
-### End-to-End Integrity Verification
-Optional cryptographic hash verification for tunneled streams (beyond just encryption).
+### Per-Tunnel Resource Controls (Phase 3 ✅)
+`--max-connections`, `--bandwidth-limit`, `--idle-timeout`. Enforced by relay via AcquireConn/ReleaseConn.
 
-### Built-in Relay Authentication Options
-Add SSH public key auth and mTLS for relay control plane (in addition to current PAKE/bearer).
+### Integrity Verification (Phase 4 ✅)
+Optional HMAC-SHA256 per tunnel message via `--integrity`. Key derived from PAKE session key.
 
-## Strong Differentiators (High Value)
+### Dynamic Split Tunneling (Phase 5 ✅)
+Domain patterns (`*.example.com`) + CIDRs in `--route`/`--bypass`. Matching before DNS resolution.
 
-- **Dynamic Split Tunneling Rules** — Support domain-based routing (not just CIDR), regex, or geobased bypass (via MaxMind or simple lists).
-- **Traffic Obfuscation Layer** — Pluggable obfuscation (e.g. random padding, timing jitter, mimic common protocols) on top of existing transports.
-- **QUIC Improvements** — 0-RTT support where safe, and better multiplexing fairness.
-- **UDP Tunnel Enhancements** — Better NAT traversal (ICE/STUN/TURN built-in, not just framing).
-- **Forward Secrecy** — Add PFS to all tunnel handshakes (including Noise and base PAKE flows).
-- **Audit Logging** — Optional tamper-evident audit log of tunnel creation, access tokens used, connection events (for enterprise/self-hosted use).
+### Traffic Obfuscation (Phase 6 ✅)
+Random padding (`--padding-min`/`--padding-max`), heartbeat timing jitter.
 
-## Quality & Polish Features
+## Backlog
 
-- **Connection Migration** — Seamlessly move active tunnels between relays or transports without dropping connections.
-- **Circuit Breaker & Health Awareness** — Automatic failover to backup relays or transports when quality drops.
-- **Compression Options** — Per-tunnel configurable compression (zstd, brotli) with auto-negotiation.
-- **Selective Proxying** — In SOCKS5 mode, allow fine-grained allow/deny lists per application or domain.
-- **Noise Protocol Enhancements** — Support more Noise patterns (e.g. KK, IK) and key rotation.
-- **File Transfer Upgrades**:
-  - Directory sync mode (like a lightweight rsync over the encrypted channel)
-  - Delta transfers / block-level resume for large files
-
-## Advanced / Power-User Features
-
-- **Plugin System** — Official plugin interface for custom transports, authentication methods, or stream processors.
-- **Embedded Relay Mode** — Ability to run a lightweight embedded relay inside the tunnel client for direct P2P fallback.
-- **Rate Limit & Quota System** — Configurable global and per-client quotas on relays.
-- **Wire-Level Compatibility Mode** — Option to speak a subset of Chisel/frp protocol for easier migration.
+- **Built-in Relay Authentication** — SSH public key auth, mTLS for relay control plane
+- **QUIC Improvements** — 0-RTT, better multiplexing fairness
+- **Noise Protocol Enhancements** — KK, IK patterns, Noise key rotation
+- **Circuit Breaker & Health Awareness** — Auto failover based on quality metrics
+- **File Transfer Upgrades** — Directory sync, delta transfers, block-level resume
+- **Rate Limit & Quota System** — Global and per-client quotas on relays
+- **Wire-Level Compatibility** — Speak a subset of Chisel/frp for migration
+- **Bandwidth & Latency Adaptive Tuning** — Auto-adjust yamux window, heartbeat, buffering based on measured RTT

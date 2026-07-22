@@ -26,10 +26,12 @@ type TunnelEntry struct {
 	LastSeen       time.Time
 	PublicPort     int
 	RemoteAddr     string // assigned public TCP address for TCP tunnels
-	MaxConns       int    // max concurrent proxy connections (0 = unlimited)
-	BandwidthLimit int64  // bytes/sec, 0=unlimited
-	IdleTimeout    int    // proxy connection idle timeout in seconds, 0=default (30s)
-	HealthURL      string // optional health check URL
+	MaxConns       int
+	BandwidthLimit int64
+	IdleTimeout    int
+	HealthURL      string
+	ACLAllow       []string
+	ACLDeny        []string
 
 	// Concurrency semaphore (initialized lazily when MaxConns > 0)
 	connSem chan struct{}

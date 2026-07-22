@@ -40,6 +40,13 @@ const (
 	// Session resumption
 	TypeTunnelResume Type = "tunnel-resume"
 
+	// Forward secrecy rekeying
+	TypeRekey    Type = "rekey"
+	TypeRekeyAck Type = "rekey-ack"
+
+	// Connection migration
+	TypeTunnelMigrate Type = "tunnel-migrate"
+
 	// Relay HA sync
 	TypeTunnelSync       Type = "tunnel-sync"
 	TypeTunnelSyncRemove Type = "tunnel-sync-remove"
