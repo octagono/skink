@@ -14,6 +14,42 @@
 
 Inspired by croc — extended with SOCKS5 proxying, multi-hop relay chaining, WSS transport, and Noise Protocol encryption.
 
+## Why Skink?
+
+Most tunnel tools make you choose: simple or secure, fast or configurable, CLI-friendly or feature-rich. Skink doesn't.
+
+It gives you **ngrok-style reverse tunnels** with PFS rekeying, per-tunnel ACLs, tamper-evident audit logging, and HA clustering — all in a **single static Go binary** with zero runtime dependencies. File transfer, SOCKS5 proxy, remote exec, and MCP AI-agent integration ship in the same binary.
+
+Whether you're exposing a dev server through NAT, routing a red team C2 through three chained relays, or scripting file transfers in CI: one binary, one syntax, one encrypted channel.
+
+### Pentesting & Red Team Usage
+
+Skink is particularly well-suited for authorized penetration testing and red team operations.
+
+**Common Workflows**:
+- **SOCKS5 Pivot**: `skink tunnel --type socks5` — route nmap, impacket, CrackMapExec, etc. through one encrypted channel.
+- **Stealthy Access**: Private tunnels + access token (no open ports exposed).
+- **Multi-hop Pivoting**: Chain relays for better OPSEC.
+- **Data Exfil**: Encrypted, resumable `skink send` over existing tunnels or Tor.
+- **Persistent Access**: Session persistence + HA clustering + rekeying.
+
+**Example**:
+```bash
+skink tunnel --server relay:9090 --type socks5 \
+  --acl-allow "10.0.0.0/8,*.target.corp" \
+  --rekey-interval 3600
+```
+
+**Comparison to Similar Tools**:
+
+| Tool       | File Transfer | SOCKS5 | Multi-hop | Stealth Features          | Persistence/HA | Size   | Best For |
+|------------|---------------|--------|-----------|---------------------------|----------------|--------|----------|
+| **Skink**  | Excellent    | Yes    | Excellent | High (Noise, obfuscation) | Excellent      | Small  | Full-spectrum ops |
+| Chisel     | None         | Yes    | Good      | Medium                    | Good           | Tiny   | Simple pivots |
+| frp        | Basic        | Yes    | Good      | Low                       | Good           | Small  | Enterprise |
+| ligolo-ng  | None         | Yes    | Good      | Good                      | Good           | Small  | Layer 3 speed |
+| ngrok      | Basic        | Limited| Limited   | Medium                    | Excellent      | Small  | Quick exposure (noisy) |
+
 ### Security & Resilience Highlights
 
 | Area | Feature |
@@ -68,14 +104,6 @@ skink tunnel --server relay:9090 --type socks5 --socks5-port 1080  # SOCKS5 prox
 skink exec --server relay:9090 -- ls -la /etc         # remote exec on relay
 skink noise-keygen                           # generate Noise keypair
 ```
-
-## Why Skink?
-
-Most tunnel tools make you choose: simple or secure, fast or configurable, CLI-friendly or feature-rich. Skink doesn't.
-
-It gives you **ngrok-style reverse tunnels** with PFS rekeying, per-tunnel ACLs, tamper-evident audit logging, and HA clustering — all in a **single static Go binary** with zero runtime dependencies. File transfer, SOCKS5 proxy, remote exec, and MCP AI-agent integration ship in the same binary.
-
-Whether you're exposing a dev server through NAT, routing a red team C2 through three chained relays, or scripting file transfers in CI: one binary, one syntax, one encrypted channel.
 
 ## Features
 
