@@ -37,3 +37,4 @@ Skink-static
 
 # MCP server binary (from go build ./cmd/mcp/)
 mcp
+SKINK_COMMANDS.md
