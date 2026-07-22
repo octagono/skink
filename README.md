@@ -14,6 +14,18 @@
 
 Inspired by croc — extended with SOCKS5 proxying, multi-hop relay chaining, WSS transport, and Noise Protocol encryption.
 
+### Security & Resilience Highlights
+
+| Area | Feature |
+|------|---------|
+| Forward secrecy | ECDH P-256 rekeying (`--rekey-interval`) |
+| Encryption at rest | AES-256-GCM encrypted state files (`--state-key`) |
+| Per-tunnel ACLs | IP/CIDR/domain allow/deny (`--acl-allow`, `--acl-deny`) |
+| Integrity | HMAC-SHA256 per message (`--integrity`) |
+| Tamper evidence | Append-only signed audit log (`--audit-log`) |
+| Session resilience | Persistence + resume + HA clustering + live migration |
+| Traffic obfuscation | Random padding + heartbeat jitter |
+
 > 📖 **Deep-dive article:** [*Skink: From Secure File Transfer to Full-Spectrum OPSEC Tunnel Platform*](https://octagono.org/blog/skink/) — a comprehensive technical walkthrough covering the architecture, design decisions, and operational use cases across all transports and tunnel types.
 
 ## Install
