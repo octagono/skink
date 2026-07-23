@@ -101,113 +101,6 @@ func applyTCPOptions(conn net.Conn) {
 	}
 }
 
-// SetSocketBufferers tunes the kernel socket buffers for high-throughput proxying.
-func SetSocketBufferers(conn net.Conn, read, write int) error {
-	if tcp, ok := conn.(*net.TCPConn); ok {
-		if read > 0 {
-			if err := tcp.SetReadBuffer(read); err != nil {
-				return err
-			}
-		}
-		if write > 0 {
-			if err := tcp.SetWriteBuffer(write); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// ProxyConn wraps a net.Conn with metadata about the proxy session.
-type ProxyConn struct {
-	net.Conn
-	ID        string
-	TunnelID  string
-	CreatedAt time.Time
-}
-
-func NewProxyConn(conn net.Conn, id, tunnelID string) *ProxyConn {
-	return &ProxyConn{
-		Conn:      conn,
-		ID:        id,
-		TunnelID:  tunnelID,
-		CreatedAt: time.Now(),
-	}
-}
-
-// ConnPool maintains a pool of reusable proxy connections.
-type ConnPool struct {
-	mu      sync.Mutex
-	pool    []*ProxyConn
-	maxSize int
-}
-
-func NewConnPool(maxSize int) *ConnPool {
-	return &ConnPool{
-		pool:    make([]*ProxyConn, 0, maxSize),
-		maxSize: maxSize,
-	}
-}
-
-// Put adds a connection back to the pool.
-func (p *ConnPool) Put(conn *ProxyConn) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if len(p.pool) < p.maxSize {
-		p.pool = append(p.pool, conn)
-	} else {
-		conn.Close()
-	}
-}
-
-// Get retrieves a connection from the pool, or nil if empty.
-func (p *ConnPool) Get() *ProxyConn {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if len(p.pool) == 0 {
-		return nil
-	}
-
-	conn := p.pool[len(p.pool)-1]
-	p.pool = p.pool[:len(p.pool)-1]
-	return conn
-}
-
-func (p *ConnPool) Close() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	for _, conn := range p.pool {
-		conn.Close()
-	}
-	p.pool = p.pool[:0]
-}
-
-func (p *ConnPool) Size() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return len(p.pool)
-}
-
-// AuthHandler handles tunnel-level authentication.
-type AuthHandler struct {
-	password string
-}
-
-func NewAuthHandler(password string) *AuthHandler {
-	return &AuthHandler{password: password}
-}
-
-// Authenticate checks if the given password matches.
-func (a *AuthHandler) Authenticate(password string) bool {
-	if a.password == "" {
-		return true
-	}
-	return a.password == password
-}
-
 // RateLimiter is a per-IP token bucket rate limiter using golang.org/x/time/rate.
 // Entries are evicted after not being seen for TTL duration to prevent unbounded
 // memory growth from spoofed source IPs.
@@ -239,12 +132,6 @@ func NewRateLimiter(r rate.Limit, burst int, ttl time.Duration) *RateLimiter {
 	// Background cleanup goroutine to evict stale entries
 	go rl.cleanupLoop()
 	return rl
-}
-
-// NewSimpleRateLimiter creates a rate limiter with sensible defaults.
-// 100 req/sec, burst 200, 10 minute idle TTL.
-func NewSimpleRateLimiter() *RateLimiter {
-	return NewRateLimiter(rate.Limit(100), 200, 10*time.Minute)
 }
 
 // Allow checks if a request from the given IP is allowed.

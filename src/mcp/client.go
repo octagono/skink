@@ -64,6 +64,13 @@ func RunSkink(ctx context.Context, args ...string) (*SkinkResult, error) {
 // DefaultToolTimeout is the default timeout for MCP tool operations.
 const DefaultToolTimeout = 5 * time.Minute
 
+// Default ports used by MCP tools when interacting with Skink services.
+const (
+	DefaultAPIPort       = "9093" // REST API for tunnel listing/control
+	DefaultTunnelPort    = "9090" // Tunnel control connection
+	DefaultHTTPProxyPort = "8080" // HTTP tunnel proxy
+)
+
 // ToolContext creates a context with the default timeout.
 func ToolContext(parent context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(parent, DefaultToolTimeout)

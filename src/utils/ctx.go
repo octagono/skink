@@ -183,28 +183,6 @@ func IMOHashReader(sr *io.SectionReader, bar *progressbar.ProgressBar) ([]byte, 
 	return b[:], nil
 }
 
-// IMOHashReaderFull returns full imohash (no sampling) for a SectionReader.
-func IMOHashReaderFull(sr *io.SectionReader, bar *progressbar.ProgressBar) ([]byte, error) {
-	// For full imohash (which reads entire file), use regular progress bar logic
-	if bar != nil {
-		bar.Add(0) // Start the spinner
-	}
-
-	b, err := imofull.SumSectionReader(sr)
-	if err != nil {
-		if bar != nil {
-			bar.Exit()
-		}
-		return nil, err
-	}
-
-	if bar != nil {
-		bar.Finish()
-	}
-
-	return b[:], nil
-}
-
 // MD5HashReader returns MD5 hash for a SectionReader.
 func MD5HashReader(sr *io.SectionReader, bar *progressbar.ProgressBar) ([]byte, error) {
 	// Reset to beginning

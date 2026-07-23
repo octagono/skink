@@ -18,21 +18,10 @@ const (
 	ExitCodeUnavailable = 6 // resource not found or unavailable
 )
 
-// ExitError carries a semantic exit code for agent-friendly error handling.
-type ExitError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
-func (e *ExitError) Error() string { return e.Message }
-
 // ExitCode returns the exit code for the error.
 func ExitCode(err error) int {
 	if err == nil {
 		return ExitCodeOK
-	}
-	if e, ok := err.(*ExitError); ok {
-		return e.Code
 	}
 	// Classify common error patterns from the error string
 	msg := err.Error()
@@ -69,40 +58,6 @@ type JSONResult struct {
 type JSONError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
-}
-
-// OutputResult writes a structured result. If outputFmt is "json", writes
-// a JSON envelope to stdout. Otherwise, calls printFn for human-friendly output.
-func OutputResult(outputFmt string, data interface{}, printFn func()) {
-	if outputFmt == "json" {
-		result := JSONResult{Status: "ok", Data: data}
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "")
-		enc.Encode(result)
-		return
-	}
-	if printFn != nil {
-		printFn()
-	}
-}
-
-// OutputError writes a structured error. If outputFmt is "json", writes
-// a JSON error envelope to stderr. Otherwise, prints the error message to stderr.
-// Returns an ExitError with the appropriate exit code so the caller can os.Exit with it.
-func OutputError(outputFmt string, err error, code int) error {
-	if outputFmt == "json" {
-		jsonErr := JSONResult{
-			Status: "error",
-			Error: &JSONError{
-				Code:    code,
-				Message: err.Error(),
-			},
-		}
-		enc := json.NewEncoder(os.Stderr)
-		enc.SetIndent("", "")
-		enc.Encode(jsonErr)
-	}
-	return &ExitError{Code: code, Message: err.Error()}
 }
 
 // OutputVersion writes version info. Supports --json format.

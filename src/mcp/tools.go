@@ -299,14 +299,13 @@ func handleTunnelList(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 		host = strings.Split(server, ":")[0]
 	}
 
-	apiPort := "9093" // default API port
 	apiToken, _ := args["api_token"].(string)
 
 	curlArgs := []string{"-s"}
 	if apiToken != "" {
 		curlArgs = append(curlArgs, "-H", "Authorization: Bearer "+apiToken)
 	}
-	curlArgs = append(curlArgs, fmt.Sprintf("http://%s:%s/api/v1/tunnels", host, apiPort))
+	curlArgs = append(curlArgs, fmt.Sprintf("http://%s:%s/api/v1/tunnels", host, DefaultAPIPort))
 
 	return runRawTool(ctx, "curl", curlArgs...)
 }
@@ -328,14 +327,13 @@ func handleTunnelStop(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 		host = server
 	}
 
-	apiPort := "9093"
 	apiToken, _ := args["api_token"].(string)
 
 	curlArgs := []string{"-s", "-X", "DELETE"}
 	if apiToken != "" {
 		curlArgs = append(curlArgs, "-H", "Authorization: Bearer "+apiToken)
 	}
-	curlArgs = append(curlArgs, fmt.Sprintf("http://%s:%s/api/v1/tunnels/%s", host, apiPort, tunnelID))
+	curlArgs = append(curlArgs, fmt.Sprintf("http://%s:%s/api/v1/tunnels/%s", host, DefaultAPIPort, tunnelID))
 
 	return runRawTool(ctx, "curl", curlArgs...)
 }
@@ -350,7 +348,7 @@ func handleTunnelAccess(ctx context.Context, req mcp.CallToolRequest) (*mcp.Call
 
 	server, _ := args["server"].(string)
 	if server == "" {
-		server = "localhost:9090"
+		server = "localhost:" + DefaultTunnelPort
 	}
 	local, _ := args["local"].(string)
 	if local == "" {

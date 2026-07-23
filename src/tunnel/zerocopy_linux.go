@@ -137,21 +137,6 @@ func drainPipe(pipeFd, dstFd int, n int64) (int64, error) {
 	return written, nil
 }
 
-// sendFileToConn uses sendfile(2) for zero-copy file-to-socket transfer.
-// The kernel copies file data directly from the page cache to the socket,
-// bypassing user-space entirely. Falls back to io.CopyBuffer if not eligible.
-func sendFileToConn(dst net.Conn, src *os.File) (int64, error) {
-	dstConn, ok := dst.(*net.TCPConn)
-	if !ok {
-		buf := getCopyBuf()
-		defer putCopyBuf(buf)
-		return io.CopyBuffer(dst, src, buf)
-	}
-	// ReadFrom on *net.TCPConn internally uses sendfile(2) on Linux
-	// when the source is a regular *os.File.
-	return dstConn.ReadFrom(src)
-}
-
 // PipeConnZeroCopy uses splice(2) for bidirectional zero-copy piping on Linux.
 // Falls back to pooled-buffer io.CopyBuffer for non-TCP connections.
 func PipeConnZeroCopy(c1, c2 net.Conn) {

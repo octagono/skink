@@ -88,9 +88,7 @@ Project root owns project-wide build, release, and CI concerns. Each child owns 
 
 - **`src/tcp/`** — TCP relay server for file transfers. Handles relay connections, room management, PAKE handshake, encrypted communication, and the WebSocket/SSE/Stdio UI. Includes `defaults.go`, `options.go`, `ctx.go`, `tcp.go`, and tests.
 
-- **`src/tunnel/`** (AGENTS.md) — Reverse tunnel system (ngrok-like). Contains client and server for exposing local services through a public relay. Owns the tunnel protocol, PAKE-based registration, heartbeat, reconnection, lifecycle management, private sharing, REST API, config hot-reload, QUIC transport (`transport_quic.go`), zero-copy splice (`zerocopy_linux.go`), StreamSession abstraction (`stream_session.go`), and fuzz tests. Files: `protocol.go`, `protocol_test.go`, `config.go`, `registry.go`, `server.go`, `client.go`, `stream_session.go`, `transport_quic.go`, `zerocopy_linux.go`, `zerocopy_other.go`, `fuzz_test.go`, `config_fuzz_test.go`, `api.go`, `noise.go`, `health.go`, `metrics.go`, `reloader.go`, `secret.go`, `transport_ws.go`, `transport_pipe.go`, `transport_pipe_windows.go`, `relayhop.go`.
-
-- **`src/engine/`** (AGENTS.md) — Plugin architecture interfaces. Defines `Transport`, `StreamMultiplexer`, `TunnelProtocol`, `CryptoProvider`, `ProxyDriver` interfaces and `Registry` for runtime plugin registration. `adapters/` contains concrete implementations wrapping existing TCP/WSS/QUIC transports.
+- **`src/tunnel/`** (AGENTS.md) — Reverse tunnel system (ngrok-like). Contains client and server for exposing local services through a public relay. Owns the tunnel protocol, PAKE-based registration, heartbeat, reconnection, lifecycle management, private sharing, REST API, config hot-reload, QUIC transport (`transport_quic.go`), zero-copy splice (`zerocopy_linux.go`), StreamSession abstraction (`stream_session.go`), and fuzz tests. Files: `protocol.go`, `protocol_test.go`, `config.go`, `registry.go`, `server.go`, `client.go`, `stream_session.go`, `transport_quic.go`, `zerocopy_linux.go`, `zerocopy_other.go`, `fuzz_test.go`, `config_fuzz_test.go`, `api.go`, `keygen.go`, `store.go`, `embed.go`, `rekey.go`, `stun.go`, `health.go`, `metrics.go`, `reloader.go`, `secret.go`, `transport_ws.go`, `transport_pipe.go`, `transport_pipe_windows.go`, `relayhop.go`.
 
 - **`src/proxy/`** (AGENTS.md) — HTTP, TCP, and UDP reverse proxy layer for the tunnel system. Routes public connections through registered tunnels. Files: `http.go`, `tcp.go`, `udp.go`, `manager.go`.
 
@@ -98,7 +96,7 @@ Project root owns project-wide build, release, and CI concerns. Each child owns 
 
 - **`src/compress/`** — Compression wrapper (currently gzip/deflate).
 
-- **`src/crypt/`** — Encryption layer using NaCl secretbox (XChaCha20-Poly1305).
+- **`src/crypt/`** (AGENTS.md) — Encryption layer using NaCl secretbox (XChaCha20-Poly1305) and AES-GCM, with PBKDF2-HMAC-SHA256 key derivation (600,000 iterations, 16-byte salt per NIST SP 800-132). The PBKDF2 parameters are protocol-breaking — both peers must match.
 
 - **`src/message/`** — Message type definitions and send/receive encoding. Defines all protocol message types including tunnel messages.
 
@@ -107,8 +105,6 @@ Project root owns project-wide build, release, and CI concerns. Each child owns 
 - **`src/mnemonicode/`** — Human-readable code word generation for transfer codes.
 
 - **`src/utils/`** — File helpers, config directory resolution, temp file marking/cleanup, stdin readiness detection.
-
-- **`src/diskusage/`** — Platform-specific disk space checks (Linux/Unix, Windows via `diskusage_windows.go`).
 
 - **`src/install/`** — Build-time version injection (`updateversion.go`).
 

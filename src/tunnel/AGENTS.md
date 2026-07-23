@@ -15,7 +15,7 @@ This package owns all tunnel protocol logic:
 - `server.go` — `Server` with dual-listener (control + data), PAKE auth, stream multiplexing, `RequestProxy`, `TunnelEventHandler`, forward proxy (`FWD|`), exec (`EXEC|`), private access (`ACCESS|`), multi-hop relay hop, WSS transport, named pipe, upstream relay registration.
 - `client.go` — `Client` with reconnect, PAKE, stream data session (yamux or QUIC), jittered heartbeat, SOCKS5 handler, forward stream opening, TLS wrapping, WSS/pipe/QUIC transport, private access mode (`StartAccess`).
 - `stream_session.go` — `StreamSession` interface abstracting yamux and QUIC. `YamuxSessionWrapper` adapts `*yamux.Session`. Both yamux and QUIC sessions satisfy this interface for transparent transport selection.
-- `transport_quic.go` — QUIC transport via quic-go. `QuicDial`, `QuicListen`, `QuicSessionWrapper` (StreamSession over native QUIC streams), `QuicStreamConn` (net.Conn adapter), `GenerateEphemeralCert`.
+- `transport_quic.go` — QUIC transport via quic-go. `QuicDial`, `QuicSessionWrapper` (StreamSession over native QUIC streams), `QuicStreamConn` (net.Conn adapter). Client-side only; server-side QUIC listener (`QuicListen`) removed as dead code.
 - `zerocopy_linux.go` — Linux-only zero-copy via `splice(2)` through kernel pipe buffer and `sendfile(2)` for file-to-socket. `PipeConnZeroCopy` auto-detects splice eligibility.
 - `zerocopy_other.go` — Non-Linux fallback to pooled `io.CopyBuffer`.
 - `fuzz_test.go` — Fuzz tests: `FuzzParseStreamID`, `FuzzClassifyStreamID`, `FuzzParseAccessHeader`. Extracts `parseStreamID`/`classifyStreamID`/`parseAccessHeader` as pure functions.
@@ -24,13 +24,13 @@ This package owns all tunnel protocol logic:
 - `transport_ws.go` — `wsConn` net.Conn adapter for gorilla/websocket, utls-based WSS dialer (Chrome JA3), Noise-wrapped WebSocket encryption.
 - `transport_pipe.go` / `transport_pipe_windows.go` — Cross-platform named pipe transport (Windows SMB).
 - `relayhop.go` — `RelayHop` for multi-hop relay chaining (`--upstream`).
-- `noise.go` — Noise Protocol `NK` handshake (flynn/noise), `NoiseConn`, key generation.
+- `keygen.go` — Noise keypair generation.
 - `health.go` — `HealthChecker` with TCP/HTTP probes per tunnel entry.
 - `metrics.go` — Prometheus `/metrics` handler, tunnel/proxy/byte counters.
-- `reloader.go` — `ConfigReloader` for JSON tunnel defs, `YAMLConfigWatcher` for hot-reload of YAML client config.
+- `reloader.go` — `YAMLConfigWatcher` for hot-reload of YAML tunnel client config (fsnotify).
 - `secret.go` — `SecretSource` interface with `FileSource`/`ExecSource`/`StaticSource` implementations.
 - `store.go` — `TunnelStore` for JSON-backed tunnel state persistence with atomic writes. Used by `--persist` flag on relay. `PersistedTunnel` struct preserves tunnel identity across restarts.
-- `integrity.go` — `integrityConn` net.Conn wrapper that adds HMAC-SHA256 tags to every read/write. Used by `--integrity` flag on tunnel subcommand.
+
 - `protocol.go` also contains: `TunnelResumeMessage` (session resumption), `TunnelSyncMessage` (HA peer sync), `SetPadding`/`randomPadding` (traffic obfuscation), extended `RouteRule` with domain pattern matching (`*.example.com`).
 
 ## Local Contracts
@@ -41,8 +41,10 @@ This package owns all tunnel protocol logic:
 - **Transport selection** — `--transport tcp|wss|quic`. QUIC uses native multiplexing (no yamux, no head-of-line blocking). TCP/WSS use yamux.
 - **Proxy connection delivery** — `RequestProxy` stores `chan net.Conn` in `sync.Map pendingProxy[proxyID]` before sending `ReqProxy` over control connection. The stream data delivers the connection.
 - **Data stream protocol** — 2-byte big-endian length prefix + payload. Prefix determines stream type: raw proxyID (reverse proxy), `FWD|target` (forward/SOCKS5), `EXEC|cmd` (remote exec), `ACCESS|token|target` (private access), `REG|`/`DATA|` (multi-hop relay).
+- **RCE gate on `EXEC|` (security)** — `handleExecStream` refuses to run commands unless `Server.allowExec` is true (off by default). Set via `SetAllowExec(bool)` / CLI `--allow-exec` flag (`SKINK_ALLOW_EXEC` env) on the relay command. When disabled, the stream replies `{"error":"exec disabled on this relay","exit_code":-1}`. When enabled, commands run with a 60s `exec.CommandContext` timeout. Do not remove the gate or default it on.
+- **SSRF protection on `FWD|` (security)** — `handleForwardStream` resolves the target hostname once via `resolveAndCheckTarget(addr)` and blocks loopback/private/link-local/unspecified IPs. The resolved IP is dialed directly (not re-resolved) to prevent DNS rebinding TOCTOU. Unresolvable hosts are allowed (fail at dial). Do not remove or weaken this check or reintroduce double-resolution.
 - **Zero-copy path** — On Linux, `PipeConnZeroCopy` uses `splice(2)` through a kernel pipe buffer for TCP-to-TCP, bypassing user space. Falls back to pooled `io.CopyBuffer` for non-TCP (WSS, QUIC streams, named pipes).
-- **Noise Protocol** — `Noise_NK` pattern (server static key), `NoiseConn` wrapping `net.Conn`.
+- **Noise Protocol** — Keypair generation via `skink noise-keygen` (Curve25519, `NK` pattern). Optional noise encryption layer in `transport_ws.go` for WebSocket connections.
 - **Metrics** — Prometheus `/metrics` on configurable port. Also JSON `/status` and `/tunnels`.
 - **Buffer pool** — `copyBufferPool` (`sync.Pool` of 32KB `[]byte` slices) in `server.go`. All hot-path data copying uses `io.CopyBuffer` with pooled buffers via `getCopyBuf()`/`putCopyBuf()`. Returns buffers to pool after use.
 - **HTTP local connection pool** — `client.go` `localConnPool` (max 16 idle, 30s idle timeout) reuses TCP connections to `config.LocalAddr` for `TunnelTypeHTTP`. Initialized in `NewClient` only for HTTP tunnels; closed in `cleanup()`. TCP/UDP/SOCKS5 tunnels dial fresh per request. `handleProxyRequest` returns the connection via `Put` after bidirectional copy completes.

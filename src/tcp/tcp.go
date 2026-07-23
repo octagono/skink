@@ -293,7 +293,7 @@ func (s *server) clientCommunication(c *comm.Comm) (room string, err error) {
 	if err != nil {
 		return
 	}
-	log.Debugf("strongkey: %x", strongKey)
+	log.Debugf("strongkey: %x...", strongKey[:4])
 
 	// receive salt
 	salt, err := c.Receive()
@@ -561,7 +561,7 @@ func ConnectToTCPServer(address, password, room string, timelimit ...time.Durati
 		log.Debug(err)
 		return
 	}
-	log.Debugf("strong key: %x", strongKey)
+	log.Debugf("strong key: %x...", strongKey[:4])
 
 	strongKeyForEncryption, salt, err := crypt.New(strongKey, nil)
 	if err != nil {

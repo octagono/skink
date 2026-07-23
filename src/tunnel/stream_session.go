@@ -35,26 +35,11 @@ type YamuxSessionWrapper struct {
 	session *yamux.Session
 }
 
-func NewYamuxSessionWrapper(session *yamux.Session) *YamuxSessionWrapper {
-	return &YamuxSessionWrapper{session: session}
-}
-
 func YamuxClient(conn net.Conn, cfg *yamux.Config) (StreamSession, error) {
 	if cfg == nil {
 		cfg = yamux.DefaultConfig()
 	}
 	session, err := yamux.Client(conn, cfg)
-	if err != nil {
-		return nil, err
-	}
-	return &YamuxSessionWrapper{session: session}, nil
-}
-
-func YamuxServer(conn net.Conn, cfg *yamux.Config) (StreamSession, error) {
-	if cfg == nil {
-		cfg = yamux.DefaultConfig()
-	}
-	session, err := yamux.Server(conn, cfg)
 	if err != nil {
 		return nil, err
 	}

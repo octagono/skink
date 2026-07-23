@@ -19,11 +19,12 @@ import (
 	"github.com/octagono/skink/src/comm"
 	"github.com/octagono/skink/src/crypt"
 	"github.com/octagono/skink/src/message"
+	"github.com/octagono/skink/src/models"
 	log "github.com/schollz/logger"
 	"github.com/schollz/pake/v3"
 )
 
-const udpMaxDatagram = 65507
+const udpMaxDatagram = models.UDP_MAX_DATAGRAM
 
 // localConnPool reuses TCP connections to the local service for HTTP tunnel mode.
 // Idle connections are kept up to idleTimeout, then closed on next attempt to use.
@@ -228,18 +229,6 @@ func (c *Client) Stop() {
 
 	c.wg.Wait()
 	c.clearResumeState()
-}
-
-// State returns the current tunnel state.
-func (c *Client) State() TunnelState {
-	c.stateMu.RLock()
-	defer c.stateMu.RUnlock()
-	return c.state
-}
-
-// TunnelID returns the assigned tunnel ID.
-func (c *Client) TunnelID() string {
-	return c.tunnelID
 }
 
 // startSOCKS5 starts a local SOCKS5 proxy server that forwards connections
@@ -527,21 +516,6 @@ func (c *Client) ensureDataSession() error {
 	c.dataSession = session
 	c.dataPort = port
 	return nil
-}
-
-// PublicURL returns the public URL of the tunnel.
-func (c *Client) PublicURL() string {
-	return c.publicURL
-}
-
-// Subdomain returns the assigned subdomain.
-func (c *Client) Subdomain() string {
-	return c.subdomain
-}
-
-// Token returns the assigned auth token (if any).
-func (c *Client) Token() string {
-	return c.token
 }
 
 func (c *Client) setState(state TunnelState) {

@@ -186,17 +186,10 @@ func MD5HashFile(fname string, doShowProgress bool) (hash256 []byte, err error) 
 	return
 }
 
-var imofull = imohash.NewCustom(0, 0)
 var imopartial = imohash.NewCustom(16*16*8*1024, 128*1024)
 
 func IMOHashFile(fname string) (hash []byte, err error) {
 	b, err := imopartial.SumFile(fname)
-	hash = b[:]
-	return
-}
-
-func IMOHashFileFull(fname string) (hash []byte, err error) {
-	b, err := imofull.SumFile(fname)
 	hash = b[:]
 	return
 }

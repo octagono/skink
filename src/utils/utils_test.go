@@ -57,14 +57,6 @@ func BenchmarkHighwayHash(b *testing.B) {
 	}
 }
 
-func BenchmarkImoHashFull(b *testing.B) {
-	bigFile()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		IMOHashFileFull("bigfile.test")
-	}
-}
-
 func BenchmarkSha256(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

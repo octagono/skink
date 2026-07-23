@@ -29,6 +29,10 @@ func newStop(ctx context.Context) *stop {
 	return s
 }
 
+func RunCtx(ctx context.Context, debugLevel, host, port, password string, banner ...string) error {
+	return RunWithOptionsAsync(host, port, password, WithBanner(banner...), WithLogLevel(debugLevel), WithCtx(ctx))
+}
+
 // Cancel initiate graceful shutdown
 func (s *stop) Cancel() {
 	log.Trace("tcp Cancel")
@@ -36,10 +40,6 @@ func (s *stop) Cancel() {
 		s.cancel()
 		s.cancel = nil
 	}
-}
-
-func RunCtx(ctx context.Context, debugLevel, host, port, password string, banner ...string) error {
-	return RunWithOptionsAsync(host, port, password, WithBanner(banner...), WithLogLevel(debugLevel), WithCtx(ctx))
 }
 
 func WithCtx(ctx context.Context) serverOptsFunc {

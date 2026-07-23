@@ -97,7 +97,7 @@ func handleResourceTunnels(ctx context.Context, req mcp.ReadResourceRequest) ([]
 	// Extract server from URI: skink://tunnels/{server}
 	server := strings.TrimPrefix(uri, "skink://tunnels/")
 	if server == "" {
-		server = "localhost:9090"
+		server = "localhost:" + DefaultTunnelPort
 	}
 
 	host := server
@@ -105,8 +105,7 @@ func handleResourceTunnels(ctx context.Context, req mcp.ReadResourceRequest) ([]
 		host = strings.Split(server, ":")[0]
 	}
 
-	apiPort := "9093"
-	cmd := exec.CommandContext(ctx, "curl", "-s", fmt.Sprintf("http://%s:%s/api/v1/tunnels", host, apiPort))
+	cmd := exec.CommandContext(ctx, "curl", "-s", fmt.Sprintf("http://%s:%s/api/v1/tunnels", host, DefaultAPIPort))
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("query tunnels: %w", err)
@@ -126,7 +125,7 @@ func handleResourceStatus(ctx context.Context, req mcp.ReadResourceRequest) ([]m
 	uri := req.Params.URI
 	server := strings.TrimPrefix(uri, "skink://status/")
 	if server == "" {
-		server = "localhost:9090"
+		server = "localhost:" + DefaultTunnelPort
 	}
 
 	host := server
@@ -134,8 +133,7 @@ func handleResourceStatus(ctx context.Context, req mcp.ReadResourceRequest) ([]m
 		host = strings.Split(server, ":")[0]
 	}
 
-	apiPort := "9093"
-	cmd := exec.CommandContext(ctx, "curl", "-s", fmt.Sprintf("http://%s:%s/api/v1/status", host, apiPort))
+	cmd := exec.CommandContext(ctx, "curl", "-s", fmt.Sprintf("http://%s:%s/api/v1/status", host, DefaultAPIPort))
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("query status: %w", err)
@@ -157,7 +155,7 @@ func handleResourceRelayConfig(ctx context.Context, req mcp.ReadResourceRequest)
 		"default_ports":          "9009,9010,9011,9012,9013",
 		"default_tunnel_port":    9090,
 		"default_http_port":      8080,
-		"default_api_port":       9093,
+		"default_api_port":       9093, // matches DefaultAPIPort
 		"available_tunnel_types": []string{"http", "tcp", "udp", "socks5"},
 		"available_transports":   []string{"tcp", "wss", "quic", "pipe"},
 		"skink_binary_path":      findSkinkBinarySilent(),

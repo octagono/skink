@@ -23,7 +23,7 @@ func main() {
 	go func() {
 		if err := cli.Run(); err != nil {
 			code := cli.ExitCode(err)
-			// In agent mode, errors are already written as JSON by OutputError.
+			// In agent mode, errors are already JSON-encoded (detected by "{" prefix).
 			// In text mode, print the error message.
 			if code != cli.ExitCodeGeneral || !strings.HasPrefix(err.Error(), "{") {
 				fmt.Fprintln(os.Stderr, err)

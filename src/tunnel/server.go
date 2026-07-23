@@ -95,6 +95,9 @@ type Server struct {
 	syncPeers    []string
 	syncPort     int
 	syncListener net.Listener
+
+	// allowExec gates remote command execution via EXEC| streams. Off by default.
+	allowExec bool
 }
 
 // NewServer creates a new tunnel server.
@@ -698,9 +701,18 @@ func (s *Server) handleDataStream(conn net.Conn) {
 // handleForwardStream handles a forward proxy stream (SOCKS5).
 // The server connects to the target address and pipes the stream to it.
 func (s *Server) handleForwardStream(conn net.Conn, targetAddr string) {
-	log.Debugf("forward proxy: connecting to %s", targetAddr)
+	// SSRF protection: resolve once and block private/loopback addresses.
+	// Dial the resolved IP directly to prevent DNS rebinding TOCTOU.
+	resolvedAddr, blocked := resolveAndCheckTarget(targetAddr)
+	if blocked {
+		log.Debugf("forward proxy: blocked private address %s", targetAddr)
+		conn.Close()
+		return
+	}
 
-	targetConn, err := net.DialTimeout("tcp", targetAddr, 10*time.Second)
+	log.Debugf("forward proxy: connecting to %s", resolvedAddr)
+
+	targetConn, err := net.DialTimeout("tcp", resolvedAddr, 10*time.Second)
 	if err != nil {
 		log.Debugf("forward proxy dial %s: %v", targetAddr, err)
 		conn.Close()
@@ -796,37 +808,18 @@ func putCopyBuf(buf []byte) {
 	copyBufferPool.Put(&buf)
 }
 
-// PipeConn pipes data bidirectionally between two connections and closes both.
-func PipeConn(c1, c2 net.Conn) {
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-		defer c1.Close()
-		defer c2.Close()
-		buf := getCopyBuf()
-		io.CopyBuffer(c1, c2, buf)
-		putCopyBuf(buf)
-	}()
-	go func() {
-		defer wg.Done()
-		defer c1.Close()
-		defer c2.Close()
-		buf := getCopyBuf()
-		io.CopyBuffer(c2, c1, buf)
-		putCopyBuf(buf)
-	}()
-
-	wg.Wait()
-}
-
 // handleExecStream handles a remote execution stream.
 // The stream carries "EXEC|cmd" in the header.
 // For client-side execution, the relay sends a control message and
 // waits for the client to send the response through another yamux stream.
 func (s *Server) handleExecStream(conn net.Conn, header string) {
 	defer conn.Close()
+
+	// RCE gate: remote command execution is disabled unless explicitly opted in.
+	if !s.allowExec {
+		conn.Write([]byte(`{"error":"exec disabled on this relay","exit_code":-1}`))
+		return
+	}
 
 	cmdStr := strings.TrimPrefix(header, "EXEC|")
 
@@ -841,7 +834,9 @@ func (s *Server) handleExecStream(conn net.Conn, header string) {
 		return
 	}
 
-	cmd := exec.Command(parts[0], parts[1:]...)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
 	output, err := cmd.CombinedOutput()
 	exitCode := 0
 	errMsg := ""
@@ -861,13 +856,6 @@ func (s *Server) handleExecStream(conn net.Conn, header string) {
 	}
 	respBytes, _ := json.Marshal(resp)
 	conn.Write(respBytes)
-}
-
-// yamuxWindowSize returns the yamux window size from config or default.
-func yamuxWindowSize(cfg *yamux.Config, windowSize int) {
-	if windowSize > 0 {
-		cfg.MaxStreamWindowSize = uint32(windowSize)
-	}
 }
 
 // applyProxyTCPOptions sets TCP_NODELAY and keepalive on a connection.
@@ -1387,6 +1375,12 @@ func (s *Server) SetYamuxWindowSize(size int) {
 	s.yamuxWindowSize = size
 }
 
+// SetAllowExec enables or disables remote command execution on the relay.
+// Remote exec via EXEC| streams is disabled by default for safety.
+func (s *Server) SetAllowExec(allow bool) {
+	s.allowExec = allow
+}
+
 // pakeHandshake performs PAKE authentication for the tunnel control connection.
 // Derives the PAKE weak key from the password (SHA-256) to prevent MITM session
 // substitution that would be possible with a hardcoded weak key.
@@ -1464,6 +1458,41 @@ func (s *Server) allocateTCPPort() int {
 	return port
 }
 
+// resolveAndCheckTarget resolves the target address and checks if it's private/loopback.
+// Returns the resolved address (IP:port) to dial directly, eliminating DNS rebinding TOCTOU.
+// If blocked, returns ("", true). If unresolvable, returns the original address, false.
+func resolveAndCheckTarget(addr string) (string, bool) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+		port = ""
+	}
+	// If it's already an IP, check directly
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+			return addr, true
+		}
+		return addr, false
+	}
+	// Resolve hostname to IP (single resolution — dial uses this IP)
+	ips, err := net.LookupHost(host)
+	if err != nil || len(ips) == 0 {
+		return addr, false // can't resolve, allow (will fail at dial)
+	}
+	ip := net.ParseIP(ips[0])
+	if ip == nil {
+		return addr, false
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+		return addr, true
+	}
+	// Dial the resolved IP directly to prevent DNS rebinding
+	if port != "" {
+		return net.JoinHostPort(ip.String(), port), false
+	}
+	return ip.String(), false
+}
+
 func generateTunnelID() string {
 	b := make([]byte, 16)
 	rand.Read(b)
@@ -1484,12 +1513,6 @@ func generateSubdomain() string {
 
 func generateProxyID() string {
 	b := make([]byte, 8)
-	rand.Read(b)
-	return hex.EncodeToString(b)
-}
-
-func generateToken() string {
-	b := make([]byte, 24)
 	rand.Read(b)
 	return hex.EncodeToString(b)
 }

@@ -5,10 +5,12 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"io"
+	"sync"
 
 	log "github.com/schollz/logger"
 )
 
+// Method selects the compression algorithm.
 type Method int
 
 const (
@@ -17,75 +19,100 @@ const (
 	MethodNone
 )
 
-var currentMethod Method = MethodDeflate
+// currentMethod selects the compression method at build time.
+// Never changed at runtime — effectively const after init.
+const currentMethod = MethodDeflate
 
-func SetMethod(m Method) {
-	currentMethod = m
+// gzipWriterPool reuses gzip.Writer instances across Compress calls.
+// Each writer is Reset() before use to target a new output buffer.
+var gzipWriterPool = sync.Pool{
+	New: func() any { return gzip.NewWriter(io.Discard) },
 }
 
+// gzipReaderPool reuses gzip.Reader instances across Decompress calls.
+// Each reader is Reset() before use to source from a new input buffer.
+var gzipReaderPool = sync.Pool{
+	New: func() any { return new(gzip.Reader) },
+}
+
+// Compress src using the current compression method.
+// Returns the original slice when MethodNone or on error.
 func Compress(src []byte) []byte {
 	if currentMethod == MethodNone {
 		return src
 	}
 	if currentMethod == MethodGzip {
 		var buf bytes.Buffer
-		w := gzip.NewWriter(&buf)
+		w := gzipWriterPool.Get().(*gzip.Writer)
+		w.Reset(&buf)
 		if _, err := w.Write(src); err != nil {
 			log.Debugf("gzip compress: %v", err)
+			w.Close()
+			gzipWriterPool.Put(w)
 			return src
 		}
 		w.Close()
+		gzipWriterPool.Put(w)
 		return buf.Bytes()
 	}
 	return CompressWithOption(src, flate.HuffmanOnly)
 }
 
+// CompressWithOption compresses src at the given flate level.
 func CompressWithOption(src []byte, level int) []byte {
 	if currentMethod == MethodNone {
 		return src
 	}
-	compressedData := new(bytes.Buffer)
-	compress(src, compressedData, level)
-	return compressedData.Bytes()
+	var buf bytes.Buffer
+	compress(src, &buf, level)
+	return buf.Bytes()
 }
 
+// Decompress src using the current compression method.
+// Returns the original slice when MethodNone or on error.
 func Decompress(src []byte) []byte {
 	if currentMethod == MethodNone {
 		return src
 	}
 	if currentMethod == MethodGzip {
-		r, err := gzip.NewReader(bytes.NewReader(src))
-		if err != nil {
-			log.Debugf("gzip decompress: %v", err)
+		r := gzipReaderPool.Get().(*gzip.Reader)
+		if err := r.Reset(bytes.NewReader(src)); err != nil {
+			log.Debugf("gzip decompress reset: %v", err)
+			gzipReaderPool.Put(r)
 			return src
 		}
+		defer gzipReaderPool.Put(r)
 		var buf bytes.Buffer
-		io.Copy(&buf, r)
+		if _, err := io.Copy(&buf, r); err != nil {
+			log.Debugf("gzip decompress copy: %v", err)
+			r.Close()
+			return buf.Bytes()
+		}
 		r.Close()
 		return buf.Bytes()
 	}
 	compressedData := bytes.NewBuffer(src)
-	deCompressedData := new(bytes.Buffer)
-	decompress(compressedData, deCompressedData)
-	return deCompressedData.Bytes()
+	decompressedData := new(bytes.Buffer)
+	decompress(compressedData, decompressedData)
+	return decompressedData.Bytes()
 }
 
 func compress(src []byte, dest io.Writer, level int) {
-	compressor, err := flate.NewWriter(dest, level)
+	w, err := flate.NewWriter(dest, level)
 	if err != nil {
-		log.Debugf("error level data: %v", err)
+		log.Debugf("error creating flate writer: %v", err)
 		return
 	}
-	if _, err := compressor.Write(src); err != nil {
-		log.Debugf("error writing data: %v", err)
+	if _, err := w.Write(src); err != nil {
+		log.Debugf("error writing flate data: %v", err)
 	}
-	compressor.Close()
+	w.Close()
 }
 
 func decompress(src io.Reader, dest io.Writer) {
-	decompressor := flate.NewReader(src)
-	if _, err := io.Copy(dest, decompressor); err != nil {
-		log.Debugf("error copying data: %v", err)
+	r := flate.NewReader(src)
+	defer r.Close()
+	if _, err := io.Copy(dest, r); err != nil {
+		log.Debugf("error copying flate data: %v", err)
 	}
-	decompressor.Close()
 }

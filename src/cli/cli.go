@@ -141,6 +141,7 @@ func Run() (err error) {
 				&cli.StringFlag{Name: "state-key", Value: "", Usage: "master key for state encryption (default: derived from relay password)", EnvVars: []string{"SKINK_STATE_KEY"}},
 				&cli.IntFlag{Name: "sync-port", Value: 0, Usage: "port for HA state sync between relays (0=disabled)", EnvVars: []string{"SKINK_SYNC_PORT"}},
 				&cli.StringFlag{Name: "sync-peers", Value: "", Usage: "comma-separated relay sync peers (host:port)", EnvVars: []string{"SKINK_SYNC_PEERS"}},
+				&cli.BoolFlag{Name: "allow-exec", Usage: "allow remote command execution via tunnel exec (security-sensitive)", EnvVars: []string{"SKINK_ALLOW_EXEC"}},
 			},
 		},
 		{
@@ -174,7 +175,6 @@ func Run() (err error) {
 				&cli.IntFlag{Name: "max-connections", Value: 0, Usage: "max concurrent proxy connections per tunnel (0=unlimited)", EnvVars: []string{"SKINK_MAX_CONNECTIONS"}},
 				&cli.Int64Flag{Name: "bandwidth-limit", Value: 0, Usage: "bandwidth limit in bytes/sec per tunnel (0=unlimited)", EnvVars: []string{"SKINK_BANDWIDTH_LIMIT"}},
 				&cli.IntFlag{Name: "idle-timeout", Value: 0, Usage: "proxy connection idle timeout in seconds (0=default 30s)", EnvVars: []string{"SKINK_IDLE_TIMEOUT"}},
-				&cli.BoolFlag{Name: "integrity", Usage: "enable per-message integrity verification (HMAC-SHA256)", EnvVars: []string{"SKINK_INTEGRITY"}},
 				&cli.IntFlag{Name: "padding-min", Value: 0, Usage: "minimum random padding bytes per message (0=disabled)", EnvVars: []string{"SKINK_PADDING_MIN"}},
 				&cli.IntFlag{Name: "padding-max", Value: 0, Usage: "maximum random padding bytes per message (0=disabled)", EnvVars: []string{"SKINK_PADDING_MAX"}},
 				&cli.IntFlag{Name: "rekey-interval", Value: 0, Usage: "seconds between PFS rekeying (0=disabled, uses ECDH over encrypted channel)", EnvVars: []string{"SKINK_REKEY_INTERVAL"}},
@@ -1056,6 +1056,12 @@ func relay(c *cli.Context) (err error) {
 		if pipeName := c.String("pipe-name"); pipeName != "" {
 			srv.SetPipeName(pipeName)
 			log.Infof("named pipe transport enabled: %s", pipeName)
+		}
+
+		// Gate remote command execution (off by default; security-sensitive)
+		srv.SetAllowExec(c.Bool("allow-exec"))
+		if c.Bool("allow-exec") {
+			log.Warnf("remote command execution ENABLED on relay -- EXEC| streams will run commands on this host")
 		}
 
 		// Wire TCP proxy lifecycle: start listener when TCP tunnel registers,

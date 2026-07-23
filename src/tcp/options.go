@@ -29,13 +29,6 @@ func WithLogLevel(level string) serverOptsFunc {
 	}
 }
 
-func WithRoomCleanupInterval(interval time.Duration) serverOptsFunc {
-	return func(s *server) error {
-		s.roomCleanupInterval = interval
-		return nil
-	}
-}
-
 func WithRoomTTL(ttl time.Duration) serverOptsFunc {
 	return func(s *server) error {
 		s.roomTTL = ttl

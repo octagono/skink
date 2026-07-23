@@ -40,28 +40,28 @@ func TestBackoffDuration(t *testing.T) {
 func TestStateTransitions(t *testing.T) {
 	c := &Client{}
 
-	if s := c.State(); s != TunnelStateDisconnected {
+	if s := c.state; s != TunnelStateDisconnected {
 		t.Errorf("expected disconnected, got %v", s)
 	}
 
 	c.setState(TunnelStateConnecting)
-	if s := c.State(); s != TunnelStateConnecting {
+	if s := c.state; s != TunnelStateConnecting {
 		t.Errorf("expected connecting, got %v", s)
 	}
 
 	c.setState(TunnelStateConnected)
-	if s := c.State(); s != TunnelStateConnected {
+	if s := c.state; s != TunnelStateConnected {
 		t.Errorf("expected connected, got %v", s)
 	}
 
 	c.setState(TunnelStateError)
-	if s := c.State(); s != TunnelStateError {
+	if s := c.state; s != TunnelStateError {
 		t.Errorf("expected error, got %v", s)
 	}
 
 	// Back to disconnected
 	c.setState(TunnelStateDisconnected)
-	if s := c.State(); s != TunnelStateDisconnected {
+	if s := c.state; s != TunnelStateDisconnected {
 		t.Errorf("expected disconnected, got %v", s)
 	}
 }
@@ -125,10 +125,6 @@ func TestNewClient(t *testing.T) {
 	client := NewClient(config)
 	if client == nil {
 		t.Fatal("NewClient returned nil")
-	}
-
-	if s := client.State(); s != TunnelStateDisconnected {
-		t.Errorf("expected disconnected, got %v", s)
 	}
 
 	// HTTP tunnel type should initialize connection pool
@@ -195,16 +191,16 @@ func TestPublicAccessors(t *testing.T) {
 		token:     "tok_xyz",
 	}
 
-	if id := client.TunnelID(); id != "abc123" {
+	if id := client.tunnelID; id != "abc123" {
 		t.Errorf("expected abc123, got %s", id)
 	}
-	if u := client.PublicURL(); u != "http://test.relay.com" {
+	if u := client.publicURL; u != "http://test.relay.com" {
 		t.Errorf("expected http://test.relay.com, got %s", u)
 	}
-	if s := client.Subdomain(); s != "test" {
+	if s := client.subdomain; s != "test" {
 		t.Errorf("expected test, got %s", s)
 	}
-	if tk := client.Token(); tk != "tok_xyz" {
+	if tk := client.token; tk != "tok_xyz" {
 		t.Errorf("expected tok_xyz, got %s", tk)
 	}
 }
@@ -236,7 +232,7 @@ func TestDefaultConfig(t *testing.T) {
 	if client == nil {
 		t.Fatal("NewClient with zero-value config returned nil")
 	}
-	if s := client.State(); s != TunnelStateDisconnected {
+	if s := client.state; s != TunnelStateDisconnected {
 		t.Errorf("expected disconnected, got %v", s)
 	}
 }

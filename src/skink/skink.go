@@ -1681,7 +1681,6 @@ func (c *Client) Receive() (err error) {
 				c.setRelayControlAddress(serverTry)
 				c.ExternalIP = externalIP
 				c.conn[0].Close()
-				c.conn[0] = nil
 				c.conn[0] = conn
 				break
 			}
@@ -2024,7 +2023,7 @@ func (c *Client) processMessagePake(m message.Message, attempt *transferAttemptS
 
 		// generate salt and send it back to recipient
 		log.Debug("generating salt")
-		salt = make([]byte, 8)
+		salt = make([]byte, 16)
 		if _, rerr := rand.Read(salt); rerr != nil {
 			log.Errorf("can't generate random numbers: %v", rerr)
 			return pakeHandshakeError{err: rerr}
@@ -2053,7 +2052,7 @@ func (c *Client) processMessagePake(m message.Message, attempt *transferAttemptS
 	if err != nil {
 		return pakeHandshakeError{err: err}
 	}
-	log.Debugf("generated key = %+x with salt %x", c.Key, salt)
+	log.Debugf("generated key = %x... (masked) with salt %x... (masked)", c.Key[:4], salt[:4])
 
 	// connects to the other ports of the server for transfer
 	var wg sync.WaitGroup
@@ -2796,6 +2795,7 @@ func (c *Client) sendData(i int, dataConn *comm.Comm, fread *os.File, attempt *t
 	var readingPos int64
 	pos := uint64(0)
 	curi := float64(0)
+	data := make([]byte, models.TCP_BUFFER_SIZE/2)
 	for {
 		if err := c.ctxErr(); err != nil {
 			log.Tracef("stopping send %d: %v", i, err)
@@ -2804,7 +2804,6 @@ func (c *Client) sendData(i int, dataConn *comm.Comm, fread *os.File, attempt *t
 		var n int
 		var errRead error
 		if math.Mod(curi, float64(len(c.Options.RelayPorts))) == float64(i) {
-			data := make([]byte, models.TCP_BUFFER_SIZE/2)
 			n, errRead = fread.ReadAt(data, readingPos)
 			if c.limiter != nil {
 				r := c.limiter.ReserveN(time.Now(), n)

@@ -12,12 +12,18 @@ import (
 	log "github.com/schollz/logger"
 )
 
-const TCP_BUFFER_SIZE = 1024 * 64
+const (
+	TCP_BUFFER_SIZE = 1024 * 64
+
+	// UDP_MAX_DATAGRAM is the maximum safe UDP datagram payload size.
+	// 65535 (max UDP) - 8 (UDP header) - 20 (IPv4 header) = 65507.
+	UDP_MAX_DATAGRAM = 65507
+)
 
 // DEFAULT_RELAY is the default relay used (can be set using --relay)
 var (
-	DEFAULT_RELAY      = "relay.octagono.dev"
-	DEFAULT_RELAY6     = "relay6.octagono.dev"
+	DEFAULT_RELAY      = net.JoinHostPort("relay.octagono.dev", DEFAULT_PORT)
+	DEFAULT_RELAY6     = net.JoinHostPort("relay6.octagono.dev", DEFAULT_PORT)
 	DEFAULT_PORT       = "9009"
 	DEFAULT_PASSPHRASE = "pass123"
 	INTERNAL_DNS       = false
@@ -82,22 +88,6 @@ func init() {
 		}
 	}
 	log.Trace("Using internal DNS: ", INTERNAL_DNS)
-	var err error
-	var addr string
-	addr, err = lookup(DEFAULT_RELAY)
-	if err == nil {
-		DEFAULT_RELAY = net.JoinHostPort(addr, DEFAULT_PORT)
-	} else {
-		DEFAULT_RELAY = ""
-	}
-	log.Tracef("Default ipv4 relay: %s", addr)
-	addr, err = lookup(DEFAULT_RELAY6)
-	if err == nil {
-		DEFAULT_RELAY6 = net.JoinHostPort(addr, DEFAULT_PORT)
-	} else {
-		DEFAULT_RELAY6 = ""
-	}
-	log.Tracef("Default ipv6 relay: %s", addr)
 }
 
 func lookup(address string) (ipaddress string, err error) {

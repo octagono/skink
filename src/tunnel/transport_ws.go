@@ -1,8 +1,6 @@
 package tunnel
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -266,17 +264,6 @@ func utlsWSSDialer(addr, path string, tlsSkipVerify bool, noisePrivKey string) (
 	return NewWSConn(wssConn), nil
 }
 
-func wsGenerateKey() string {
-	b := make([]byte, 24)
-	if _, err := rand.Read(b); err != nil {
-		for i := range b {
-			b[i] = byte(time.Now().UnixNano() >> (i * 8))
-		}
-	}
-	return strings.TrimRight(
-		base64.StdEncoding.EncodeToString(b), "=")
-}
-
 // WSClientDialer dials a WebSocket endpoint and returns a net.Conn adapter.
 // Uses utls for browser fingerprint cloaking by default.
 func WSClientDialer(addr, path string, tlsSkipVerify bool) (net.Conn, error) {
@@ -327,13 +314,6 @@ func StartWSServer(addr string, handler func(net.Conn)) (*http.Server, error) {
 	return srv, nil
 }
 
-func AddWSSToHTTPServer(srv *http.Server, handler func(net.Conn)) {
-	mux, ok := srv.Handler.(*http.ServeMux)
-	if ok {
-		mux.HandleFunc(WSPath, WSServerHandler(nil, handler))
-	}
-}
-
 func HasWSSPrefix(addr string) bool {
 	return strings.HasPrefix(addr, "ws://") || strings.HasPrefix(addr, "wss://")
 }
@@ -342,29 +322,4 @@ func StripWSSPrefix(addr string) string {
 	addr = strings.TrimPrefix(addr, "wss://")
 	addr = strings.TrimPrefix(addr, "ws://")
 	return addr
-}
-
-// DialNoiseWSS dials a WSS endpoint and wraps the connection in Noise encryption.
-// The Noise handshake is performed over the WebSocket before any tunnel data flows.
-func DialNoiseWSS(addr, path string, tlsSkipVerify bool, noisePubKey string) (net.Conn, error) {
-	ws, err := utlsWSSDialer(addr, path, tlsSkipVerify, "")
-	if err != nil {
-		return nil, err
-	}
-
-	// Perform Noise NK handshake over the WebSocket
-	// The server's public key is the Noise public key configured by the user
-	if noisePubKey != "" {
-		result, err := noiseHandshakeInitiator(ws, noisePubKey)
-		if err != nil {
-			ws.Close()
-			return nil, fmt.Errorf("noise handshake: %w", err)
-		}
-
-		nc := NewNoiseConn(ws, result)
-		ws.SetNoiseKeys(nc.NoiseEncryptFunc(), nc.NoiseDecryptFunc())
-		log.Debugf("noise-wss: encryption enabled")
-	}
-
-	return ws, nil
 }

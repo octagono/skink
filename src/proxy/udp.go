@@ -7,14 +7,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/octagono/skink/src/models"
 	"github.com/octagono/skink/src/tunnel"
 	log "github.com/schollz/logger"
 )
 
 const (
-	udpReadTimeout     = 60 * time.Second // idle timeout before closing session
-	udpMaxDatagram     = 65507            // max safe UDP datagram size
-	udpCleanupInterval = 5 * time.Minute  // stale session cleanup
+	udpReadTimeout     = 60 * time.Second        // idle timeout before closing session
+	udpMaxDatagram     = models.UDP_MAX_DATAGRAM // max safe UDP datagram size
+	udpCleanupInterval = 5 * time.Minute         // stale session cleanup
 )
 
 // udpSession tracks a UDP client session and its associated yamux stream.

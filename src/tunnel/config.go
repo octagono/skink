@@ -80,10 +80,6 @@ func (c *ConfigFile) ApplyToConfig(cfg *Config) {
 	}
 }
 
-func DefaultConfigFile() string {
-	return "skink-tunnel.yaml"
-}
-
 // HotReloadConfig specifies which config fields can be hot-reloaded
 // without restarting the tunnel.
 type HotReloadConfig struct {

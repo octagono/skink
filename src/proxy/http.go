@@ -111,15 +111,6 @@ func NewHTTPProxy(cfg HTTPProxyConfig) *HTTPProxy {
 	return p
 }
 
-// NewHTTPProxySimple is a backwards-compatible constructor.
-func NewHTTPProxySimple(server *tunnel.Server, domain string, port int) *HTTPProxy {
-	return NewHTTPProxy(HTTPProxyConfig{
-		Server: server,
-		Domain: domain,
-		Port:   port,
-	})
-}
-
 // Start begins listening for HTTP connections.
 func (p *HTTPProxy) Start() error {
 	scheme := "http"

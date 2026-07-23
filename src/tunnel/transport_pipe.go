@@ -17,12 +17,6 @@ type PipeConfig struct {
 	ServerAddr string
 }
 
-func DefaultPipeConfig() PipeConfig {
-	return PipeConfig{
-		PipeName: "skink-tunnel",
-	}
-}
-
 // pipeDialer is set by platform-specific init() to the appropriate dial function.
 var pipeDialer func(addr, pipeName string) (net.Conn, error)
 
