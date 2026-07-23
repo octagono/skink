@@ -73,7 +73,7 @@ build-transfer:
 # MCP server binary for AI agent integration
 build-mcp:
 	@echo "==> Building MCP server..."
-	go build -ldflags='$(LD_FLAGS)' -o $(BINARY)-mcp ./cmd/mcp/
+	go build -ldflags='-s -w -X main.Version=$(VERSION)' -o $(BINARY)-mcp ./cmd/mcp/
 	@echo "==> Done: $(BINARY)-mcp"
 	@$(MAKE) checksum-file CHECKSUM_FILE=$(BINARY)-mcp
 
