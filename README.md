@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://github.com/octagono/skink/releases/latest"><img src="https://img.shields.io/github/v/release/octagono/skink?color=blue&label=release" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT"></a>
-  <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go" alt="Go version"></a>
+  <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go" alt="Go version"></a>
 </p>
 
 **Skink** is a file transfer tool **and** a full-featured reverse tunnel platform (ngrok/frp/Chisel-like). Move files, expose local services, or route entire toolchains through a single encrypted tunnel.
@@ -57,8 +57,6 @@ skink tunnel --server relay:9090 --type socks5 \
 | Forward secrecy | ECDH P-256 rekeying (`--rekey-interval`) |
 | Encryption at rest | AES-256-GCM encrypted state files (`--state-key`) |
 | Per-tunnel ACLs | IP/CIDR/domain allow/deny (`--acl-allow`, `--acl-deny`) |
-| Integrity | HMAC-SHA256 per message (`--integrity`) |
-| Tamper evidence | Append-only signed audit log (`--audit-log`) |
 | Session resilience | Persistence + resume + HA clustering + live migration |
 | Traffic obfuscation | Random padding + heartbeat jitter |
 
