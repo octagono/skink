@@ -374,20 +374,15 @@ func (s *Server) Start() error {
 	s.wg.Add(1)
 	go s.dataAcceptLoop()
 
-	// WSS is served through the HTTPS proxy when TLS is configured.
-	// Without TLS, WebSocket is available on the control port.
-	if s.port > 0 {
-		wsAddr := fmt.Sprintf("%s:%d", s.host, s.port)
-		wsSrv, err := StartWSServer(wsAddr, func(conn net.Conn) {
-			s.wg.Add(1)
-			s.HandleConnection(conn)
-		})
-		if err != nil {
-			log.Warnf("WSS transport not available: %v", err)
-		} else {
-			s.wssListener = wsSrv
-			log.Infof("tunnel server WSS on %s%s", wsAddr, WSPath)
-		}
+	// WSS is served through the HTTP/HTTPS proxy when configured (cli.go
+	// registers the WSS handler on the proxy). A separate WSS server cannot
+	// run on the same port as the TCP control listener — both the direct TCP
+	// PAKE handshake and the WebSocket upgrade path need the same port, but
+	// Go's net/http and net.Listener cannot share a port without an explicit
+	// multiplexer. The proxy-based WSS path (port 8080, with or without TLS)
+	// is the correct deployment model.
+	if s.httpPort > 0 {
+		log.Debugf("WSS transport available through HTTP proxy on port %d", s.httpPort)
 	}
 
 	// Restore persisted tunnels from the store.

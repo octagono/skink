@@ -11,4 +11,4 @@ import (
 )
 
 // registerTunnelCommands is a no-op when building with notunnel tag.
-func registerTunnelCommands(app *cli.App, commands *[]*cli.Command) {}
+func registerTunnelCommands(commands *[]*cli.Command) {}
