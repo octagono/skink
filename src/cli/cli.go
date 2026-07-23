@@ -186,7 +186,6 @@ func Run() (err error) {
 				&cli.IntFlag{Name: "embedded-relay", Value: 0, Usage: "start embedded P2P relay on port (0=disabled, for direct fallback)", EnvVars: []string{"SKINK_EMBEDDED_RELAY"}},
 				&cli.BoolFlag{Name: "adaptive-window", Usage: "auto-tune yamux window based on measured RTT", EnvVars: []string{"SKINK_ADAPTIVE_WINDOW"}},
 				&cli.StringFlag{Name: "dns", Value: "remote", Usage: "DNS resolution mode (remote, local, both)", EnvVars: []string{"SKINK_DNS"}},
-				&cli.StringFlag{Name: "audit-log", Value: "", Usage: "path to tamper-evident audit log (append-only JSON with HMAC)", EnvVars: []string{"SKINK_AUDIT_LOG"}},
 			},
 		},
 		{
