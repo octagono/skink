@@ -21,6 +21,16 @@
 go.work
 go.work.sum
 
+# Build artifacts
+skink
+skink-static
+skink-mcp
+skink-tunnel
+skink-transfer
+build/
+go.work
+go.work.sum
+
 # Environment variables file
 .env
 
