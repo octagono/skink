@@ -7,6 +7,7 @@ package cli
 // commands are absent from the binary.
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -353,16 +354,35 @@ func execCmd(c *cli.Context) error {
 	defer stream.Close()
 
 	execPayload := "EXEC|" + fullCmd
+	// Data stream protocol: 2-byte big-endian length prefix + payload
+	payloadLen := len(execPayload)
+	if payloadLen > 65535 {
+		return fmt.Errorf("exec payload too long (%d bytes)", payloadLen)
+	}
+	lenBuf := []byte{byte(payloadLen >> 8), byte(payloadLen)}
+	if _, err := stream.Write(lenBuf); err != nil {
+		return fmt.Errorf("send exec length: %w", err)
+	}
 	if _, err := stream.Write([]byte(execPayload)); err != nil {
 		return fmt.Errorf("send exec request: %w", err)
 	}
 
-	// Read response
-	response, err := io.ReadAll(stream)
-	if err != nil {
+	// Read response — server sends JSON ExecResponse
+	var resp tunnel.ExecResponse
+	if err := json.NewDecoder(stream).Decode(&resp); err != nil {
 		return fmt.Errorf("read exec response: %w", err)
 	}
 
-	fmt.Print(string(response))
+	if resp.Stdout != "" {
+		fmt.Print(resp.Stdout)
+	}
+	if resp.Stderr != "" {
+		fmt.Fprint(os.Stderr, resp.Stderr)
+	}
+	if resp.Error != "" {
+		fmt.Fprintf(os.Stderr, "error: %s\n", resp.Error)
+	}
+
+	os.Exit(resp.ExitCode)
 	return nil
 }
